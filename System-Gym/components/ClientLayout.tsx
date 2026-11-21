@@ -24,9 +24,9 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
 
   if (loading && !isPublicRoute) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0e0e10', color: '#fff', gap: '12px' }}>
-        <div style={{ width: '28px', height: '28px', border: '3px solid rgba(255,87,70,0.3)', borderTopColor: '#ff5746', borderRadius: '50%', animation: 'spinRing 0.8s linear infinite' }} />
-        <span style={{ fontSize: '15px', color: '#a0a0b0' }}>جاري التحقق من الجلسة...</span>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0c0d14', color: '#fff', gap: '12px' }}>
+        <div style={{ width: '28px', height: '28px', border: '3px solid rgba(99,102,241,0.3)', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spinRing 0.8s linear infinite' }} />
+        <span style={{ fontSize: '15px', color: '#8c90a4' }}>جاري التحقق من الجلسة...</span>
       </div>
     );
   }
@@ -42,9 +42,8 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   return (
     <div className="app-container">
       <GlobalQRScannerListener />
-      <div className="app-content">{children}</div>
       {cashier && <Sidebar />}
+      <div className="app-content">{children}</div>
     </div>
   );
 }
-
