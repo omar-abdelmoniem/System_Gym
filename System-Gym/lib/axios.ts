@@ -15,10 +15,14 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (typeof window !== 'undefined' && error.response?.status === 401) {
-      localStorage.clear();
-      sessionStorage.clear();
-      document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;';
+    if (
+      typeof window !== 'undefined' &&
+      error.response?.status === 401 &&
+      !error.config?.url?.includes('/auth/login')
+    ) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('cashier');
+      document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Lax;';
       const pathname = window.location.pathname;
       if (pathname !== '/login' && !pathname.startsWith('/member/qr/')) {
         window.location.href = '/login';
@@ -29,4 +33,3 @@ api.interceptors.response.use(
 );
 
 export default api;
-

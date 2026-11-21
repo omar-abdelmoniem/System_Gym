@@ -14,48 +14,74 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const isTokenExpired = (token: string): boolean => {
+/**
+ * Robust Base64URL + UTF-8 JWT decoder that handles Arabic and Unicode characters
+ */
+const decodeJwtPayload = (token: string): any => {
   try {
-    const payloadBase64 = token.split('.')[1];
-    if (!payloadBase64) return true;
-    const payload = JSON.parse(atob(payloadBase64));
-    if (!payload.exp) return false;
-    return payload.exp * 1000 < Date.now();
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) {
+      base64 += '=';
+    }
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    return JSON.parse(jsonPayload);
   } catch {
-    return true;
+    return null;
   }
+};
+
+const isTokenExpired = (token: string): boolean => {
+  if (!token) return true;
+  const payload = decodeJwtPayload(token);
+  if (payload && typeof payload.exp === 'number') {
+    return payload.exp * 1000 < Date.now();
+  }
+  // Never falsely expire tokens if decoding is non-standard
+  return false;
 };
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [cashier, setCashier] = useState<Cashier | null>(() => {
     if (typeof window === 'undefined') return null;
-    const token = localStorage.getItem('token');
-    const saved = localStorage.getItem('cashier');
-    if (token && !isTokenExpired(token) && saved) {
-      try {
+    try {
+      const token = localStorage.getItem('token');
+      const saved = localStorage.getItem('cashier');
+      if (token && !isTokenExpired(token) && saved) {
         return JSON.parse(saved);
-      } catch {
-        return null;
       }
+    } catch {
+      return null;
     }
     return null;
   });
 
   const [loading, setLoading] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
-    const token = localStorage.getItem('token');
-    if (!token || isTokenExpired(token)) return false;
-    const saved = localStorage.getItem('cashier');
-    return !saved;
+    try {
+      const token = localStorage.getItem('token');
+      if (!token || isTokenExpired(token)) return false;
+      const saved = localStorage.getItem('cashier');
+      return !saved;
+    } catch {
+      return false;
+    }
   });
 
   const router = useRouter();
 
   const clearAuthData = () => {
     if (typeof window !== 'undefined') {
-      localStorage.clear();
+      localStorage.removeItem('token');
+      localStorage.removeItem('cashier');
       sessionStorage.clear();
-      document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;';
+      document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Lax;';
     }
     setCashier(null);
   };
@@ -73,14 +99,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       if (savedCashier && !cashier) {
         try {
-          setCashier(JSON.parse(savedCashier));
+          const parsed = JSON.parse(savedCashier);
+          setCashier(parsed);
         } catch {
           // ignore
         }
       }
+
+      // Sync cookie so server / middleware is in harmony
+      if (typeof document !== 'undefined') {
+        document.cookie = `token=${token}; path=/; max-age=86400; SameSite=Lax;`;
+      }
+
       setLoading(false);
 
-      // Silent background verification
+      // Silent background verification with server
       try {
         const { data } = await api.get('/auth/me');
         const userObj: Cashier = {
@@ -94,6 +127,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setCashier(userObj);
         localStorage.setItem('cashier', JSON.stringify(userObj));
       } catch (err: any) {
+        // ONLY clear auth if the server explicitly rejects the token with 401
         if (err.response?.status === 401) {
           clearAuthData();
         }
@@ -106,10 +140,24 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const login = async (username: string, password: string) => {
     const { data } = await api.post('/auth/login', { username, password });
     localStorage.setItem('token', data.token);
-    localStorage.setItem('cashier', JSON.stringify(data.cashier));
-    document.cookie = `token=${data.token}; path=/; max-age=86400`;
-    setCashier(data.cashier);
-    return data.cashier;
+
+    const cashierObj: Cashier = {
+      _id: data.cashier.id || data.cashier._id,
+      name: data.cashier.name,
+      username: data.cashier.username,
+      role: data.cashier.role,
+      shiftType: data.cashier.shiftType || undefined,
+      active: true,
+    };
+
+    localStorage.setItem('cashier', JSON.stringify(cashierObj));
+
+    if (typeof document !== 'undefined') {
+      document.cookie = `token=${data.token}; path=/; max-age=86400; SameSite=Lax;`;
+    }
+
+    setCashier(cashierObj);
+    return cashierObj;
   };
 
   const logout = () => {
@@ -139,4 +187,3 @@ export const useAuth = () => {
   }
   return context;
 };
-
