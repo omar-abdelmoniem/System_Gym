@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import React, { useState } from 'react';
 import api from '../../lib/axios';
 import { useFastQuery } from '../../lib/swr';
@@ -15,34 +15,34 @@ import {
   CheckIcon
 } from '@heroicons/react/24/outline';
 
-const BASE_CATEGORIES = ['الكل', 'ملابس رياضية', 'كرياتين', 'بروتين', 'بروتين بار', 'شيك بروتين', 'شيكر', 'سبلمينت', 'عام'];
+const BASE_CATEGORIES = ['ط§ظ„ظƒظ„', 'ظ…ظ„ط§ط¨ط³ ط±ظٹط§ط¶ظٹط©', 'ظƒط±ظٹط§طھظٹظ†', 'ط¨ط±ظˆطھظٹظ†', 'ط¨ط±ظˆطھظٹظ† ط¨ط§ط±', 'ط´ظٹظƒ ط¨ط±ظˆطھظٹظ†', 'ط´ظٹظƒط±', 'ط³ط¨ظ„ظ…ظٹظ†طھ', 'ط¹ط§ظ…'];
 
 const CATEGORY_ICONS: Record<string, string> = {
-  'الكل': '🌟',
-  'ملابس رياضية': '👕',
-  'كرياتين': '⚡',
-  'بروتين': '💪',
-  'بروتين بار': '🍫',
-  'شيك بروتين': '🥤',
-  'شيكر': '🍶',
-  'سبلمينت': '💊',
-  'عام': '📦',
+  'ط§ظ„ظƒظ„': 'ًںŒں',
+  'ظ…ظ„ط§ط¨ط³ ط±ظٹط§ط¶ظٹط©': 'ًں‘•',
+  'ظƒط±ظٹط§طھظٹظ†': 'âڑ،',
+  'ط¨ط±ظˆطھظٹظ†': 'ًں’ھ',
+  'ط¨ط±ظˆطھظٹظ† ط¨ط§ط±': 'ًںچ«',
+  'ط´ظٹظƒ ط¨ط±ظˆطھظٹظ†': 'ًں¥¤',
+  'ط´ظٹظƒط±': 'ًںچ¶',
+  'ط³ط¨ظ„ظ…ظٹظ†طھ': 'ًں’ٹ',
+  'ط¹ط§ظ…': 'ًں“¦',
 };
 
 const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string; gradient: string }> = {
-  'ملابس رياضية': { bg: 'rgba(59, 130, 246, 0.15)', text: '#60a5fa', border: 'rgba(59, 130, 246, 0.35)', gradient: 'linear-gradient(135deg, #3b82f6, #1d4ed8)' },
-  'كرياتين': { bg: 'rgba(168, 85, 247, 0.15)', text: '#c084fc', border: 'rgba(168, 85, 247, 0.35)', gradient: 'linear-gradient(135deg, #a855f7, #7e22ce)' },
-  'بروتين': { bg: 'rgba(234, 179, 8, 0.15)', text: '#facc15', border: 'rgba(234, 179, 8, 0.35)', gradient: 'linear-gradient(135deg, #eab308, #ca8a04)' },
-  'بروتين بار': { bg: 'rgba(249, 115, 22, 0.15)', text: '#fb923c', border: 'rgba(249, 115, 22, 0.35)', gradient: 'linear-gradient(135deg, #f97316, #c2410c)' },
-  'شيك بروتين': { bg: 'rgba(236, 72, 153, 0.15)', text: '#f472b6', border: 'rgba(236, 72, 153, 0.35)', gradient: 'linear-gradient(135deg, #ec4899, #be185d)' },
-  'شيكر': { bg: 'rgba(20, 184, 166, 0.15)', text: '#2dd4bf', border: 'rgba(20, 184, 166, 0.35)', gradient: 'linear-gradient(135deg, #14b8a6, #0f766e)' },
-  'سبلمينت': { bg: 'rgba(16, 185, 129, 0.15)', text: '#34d399', border: 'rgba(16, 185, 129, 0.35)', gradient: 'linear-gradient(135deg, #10b981, #047857)' },
-  'عام': { bg: 'rgba(156, 163, 175, 0.15)', text: '#d1d5db', border: 'rgba(156, 163, 175, 0.35)', gradient: 'linear-gradient(135deg, #6b7280, #4b5563)' },
+  'ظ…ظ„ط§ط¨ط³ ط±ظٹط§ط¶ظٹط©': { bg: 'rgba(59, 130, 246, 0.15)', text: '#60a5fa', border: 'rgba(59, 130, 246, 0.35)', gradient: 'linear-gradient(135deg, #3b82f6, #1d4ed8)' },
+  'ظƒط±ظٹط§طھظٹظ†': { bg: 'rgba(168, 85, 247, 0.15)', text: '#c084fc', border: 'rgba(168, 85, 247, 0.35)', gradient: 'linear-gradient(135deg, #a855f7, #7e22ce)' },
+  'ط¨ط±ظˆطھظٹظ†': { bg: 'rgba(234, 179, 8, 0.15)', text: '#facc15', border: 'rgba(234, 179, 8, 0.35)', gradient: 'linear-gradient(135deg, #eab308, #ca8a04)' },
+  'ط¨ط±ظˆطھظٹظ† ط¨ط§ط±': { bg: 'rgba(249, 115, 22, 0.15)', text: '#fb923c', border: 'rgba(249, 115, 22, 0.35)', gradient: 'linear-gradient(135deg, #f97316, #c2410c)' },
+  'ط´ظٹظƒ ط¨ط±ظˆطھظٹظ†': { bg: 'rgba(236, 72, 153, 0.15)', text: '#f472b6', border: 'rgba(236, 72, 153, 0.35)', gradient: 'linear-gradient(135deg, #ec4899, #be185d)' },
+  'ط´ظٹظƒط±': { bg: 'rgba(20, 184, 166, 0.15)', text: '#2dd4bf', border: 'rgba(20, 184, 166, 0.35)', gradient: 'linear-gradient(135deg, #14b8a6, #0f766e)' },
+  'ط³ط¨ظ„ظ…ظٹظ†طھ': { bg: 'rgba(16, 185, 129, 0.15)', text: '#34d399', border: 'rgba(16, 185, 129, 0.35)', gradient: 'linear-gradient(135deg, #10b981, #047857)' },
+  'ط¹ط§ظ…': { bg: 'rgba(156, 163, 175, 0.15)', text: '#d1d5db', border: 'rgba(156, 163, 175, 0.35)', gradient: 'linear-gradient(135deg, #6b7280, #4b5563)' },
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:5000';
 
-const emptyForm = { name: '', category: 'ملابس رياضية', price: '', costPrice: '', stock: '' };
+const emptyForm = { name: '', category: 'ظ…ظ„ط§ط¨ط³ ط±ظٹط§ط¶ظٹط©', price: '', costPrice: '', stock: '' };
 
 interface CartItem {
   productId: string;
@@ -52,11 +52,11 @@ interface CartItem {
 }
 
 const Cashier = () => {
-  const [activeCategory, setActiveCategory] = useState('الكل');
+  const [activeCategory, setActiveCategory] = useState('ط§ظ„ظƒظ„');
   const [search, setSearch] = useState('');
 
   const prodParams = new URLSearchParams();
-  if (activeCategory !== 'الكل') prodParams.set('category', activeCategory);
+  if (activeCategory !== 'ط§ظ„ظƒظ„') prodParams.set('category', activeCategory);
   if (search) prodParams.set('search', search);
   const prodUrl = `/products${prodParams.toString() ? `?${prodParams.toString()}` : ''}`;
   const { data: prodsData, mutate: mutateProducts } = useFastQuery(prodUrl);
@@ -112,13 +112,13 @@ const Cashier = () => {
         items: cart.map((i) => ({ productId: i.productId, quantity: i.quantity })),
         notes,
       });
-      setMessage('✅ تمت عملية البيع بنجاح');
+      setMessage('âœ… طھظ…طھ ط¹ظ…ظ„ظٹط© ط§ظ„ط¨ظٹط¹ ط¨ظ†ط¬ط§ط­');
       setCart([]);
       setNotes('');
       loadProducts();
       setTimeout(() => setMessage(''), 3000);
     } catch (err: any) {
-      setMessage('❌ ' + (err.response?.data?.message || 'حصل خطأ'));
+      setMessage('â‌Œ ' + (err.response?.data?.message || 'ط­طµظ„ ط®ط·ط£'));
     }
   };
 
@@ -183,20 +183,20 @@ const Cashier = () => {
   };
 
   // Build dynamic categories ensuring all products are represented
-  const allCategories = ['الكل', ...Array.from(new Set([
-    'ملابس رياضية',
-    'كرياتين',
-    'بروتين',
-    'بروتين بار',
-    'شيك بروتين',
-    'شيكر',
-    'سبلمينت',
-    'عام',
+  const allCategories = ['ط§ظ„ظƒظ„', ...Array.from(new Set([
+    'ظ…ظ„ط§ط¨ط³ ط±ظٹط§ط¶ظٹط©',
+    'ظƒط±ظٹط§طھظٹظ†',
+    'ط¨ط±ظˆطھظٹظ†',
+    'ط¨ط±ظˆطھظٹظ† ط¨ط§ط±',
+    'ط´ظٹظƒ ط¨ط±ظˆطھظٹظ†',
+    'ط´ظٹظƒط±',
+    'ط³ط¨ظ„ظ…ظٹظ†طھ',
+    'ط¹ط§ظ…',
     ...products.map((p) => p.category).filter(Boolean),
   ]))];
 
   const renderProductIllustration = (category: string) => {
-    if (category === 'ملابس رياضية') {
+    if (category === 'ظ…ظ„ط§ط¨ط³ ط±ظٹط§ط¶ظٹط©') {
       return (
         <svg viewBox="0 0 64 64" fill="none" style={{ width: 46, height: 46 }}>
           <path d="M18 10L10 22L20 28L20 54L44 54L44 28L54 22L46 10L36 14C34 16 30 16 28 14L18 10Z" fill="url(#tshirt-grad)" stroke="#60a5fa" strokeWidth="2.5" strokeLinejoin="round" />
@@ -209,7 +209,7 @@ const Cashier = () => {
           </defs>
         </svg>
       );
-    } else if (category === 'كرياتين' || category === 'بروتين' || category === 'سبلمينت') {
+    } else if (category === 'ظƒط±ظٹط§طھظٹظ†' || category === 'ط¨ط±ظˆطھظٹظ†' || category === 'ط³ط¨ظ„ظ…ظٹظ†طھ') {
       return (
         <svg viewBox="0 0 64 64" fill="none" style={{ width: 44, height: 44 }}>
           <rect x="20" y="8" width="24" height="10" rx="3" fill="#a855f7" opacity="0.5" stroke="#c084fc" strokeWidth="2" />
@@ -223,7 +223,7 @@ const Cashier = () => {
           </defs>
         </svg>
       );
-    } else if (category === 'شيكر' || category === 'شيك بروتين') {
+    } else if (category === 'ط´ظٹظƒط±' || category === 'ط´ظٹظƒ ط¨ط±ظˆطھظٹظ†') {
       return (
         <svg viewBox="0 0 64 64" fill="none" style={{ width: 42, height: 42 }}>
           <path d="M24 10H40L42 16H22L24 10Z" fill="#14b8a6" stroke="#2dd4bf" strokeWidth="2" />
@@ -253,12 +253,12 @@ const Cashier = () => {
       <div className="page-header">
         <button className="btn-primary" onClick={openAddForm} style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 'bold' }}>
           <PlusIcon style={{ width: 18, height: 18 }} />
-          + منتج جديد
+          + ظ…ظ†طھط¬ ط¬ط¯ظٹط¯
         </button>
         <div>
-          <h1>المتجر والكاشير (Store & POS)</h1>
+          <h1>ط§ظ„ظ…طھط¬ط± ظˆط§ظ„ظƒط§ط´ظٹط± (Store & POS)</h1>
           <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'right' }}>
-            بيع الملابس الرياضية والمكملات والمشروبات وتسجيل المبيعات مباشرة.
+            ط¨ظٹط¹ ط§ظ„ظ…ظ„ط§ط¨ط³ ط§ظ„ط±ظٹط§ط¶ظٹط© ظˆط§ظ„ظ…ظƒظ…ظ„ط§طھ ظˆط§ظ„ظ…ط´ط±ظˆط¨ط§طھ ظˆطھط³ط¬ظٹظ„ ط§ظ„ظ…ط¨ظٹط¹ط§طھ ظ…ط¨ط§ط´ط±ط©.
           </div>
         </div>
       </div>
@@ -268,8 +268,8 @@ const Cashier = () => {
         <div className="modal-overlay" onClick={() => setShowAddProduct(false)}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
             <div className="modal-header">
-              <h3>{editProduct ? 'تعديل المنتج' : 'إضافة منتج جديد'}</h3>
-              <button className="modal-close" onClick={() => setShowAddProduct(false)}>✕</button>
+              <h3>{editProduct ? 'طھط¹ط¯ظٹظ„ ط§ظ„ظ…ظ†طھط¬' : 'ط¥ط¶ط§ظپط© ظ…ظ†طھط¬ ط¬ط¯ظٹط¯'}</h3>
+              <button className="modal-close" onClick={() => setShowAddProduct(false)}>âœ•</button>
             </div>
             <form onSubmit={handleSaveProduct} style={{ padding: '0 20px 20px' }}>
               {/* Image Upload */}
@@ -286,40 +286,40 @@ const Cashier = () => {
                   }}>
                     {imagePreview
                       ? <img src={imagePreview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      : <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}><ShoppingBagIcon style={{ width: 36, height: 36, margin: '0 auto' }} /><div style={{ fontSize: 11, marginTop: 4 }}>اختر صورة</div></div>
+                      : <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}><ShoppingBagIcon style={{ width: 36, height: 36, margin: '0 auto' }} /><div style={{ fontSize: 11, marginTop: 4 }}>ط§ط®طھط± طµظˆط±ط©</div></div>
                     }
                   </div>
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>اضغط لتغيير الصورة (اختياري)</span>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>ط§ط¶ط؛ط· ظ„طھط؛ظٹظٹط± ط§ظ„طµظˆط±ط© (ط§ط®طھظٹط§ط±ظٹ)</span>
                 </label>
                 <input id="product-img" type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageChange} />
               </div>
 
               <div className="form-row">
                 <div>
-                  <label>اسم المنتج</label>
-                  <input value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} placeholder="مثال: تيشيرت نص سوسته" required />
+                  <label>ط§ط³ظ… ط§ظ„ظ…ظ†طھط¬</label>
+                  <input value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} placeholder="ظ…ط«ط§ظ„: طھظٹط´ظٹط±طھ ظ†طµ ط³ظˆط³طھظ‡" required />
                 </div>
                 <div>
-                  <label>الكاتيجوري</label>
+                  <label>ط§ظ„ظƒط§طھظٹط¬ظˆط±ظٹ</label>
                   <select value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })} style={{ width: '100%' }}>
-                    {BASE_CATEGORIES.filter(c => c !== 'الكل').map(c => <option key={c} value={c}>{c}</option>)}
+                    {BASE_CATEGORIES.filter(c => c !== 'ط§ظ„ظƒظ„').map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label>سعر البيع (ج.م)</label>
+                  <label>ط³ط¹ط± ط§ظ„ط¨ظٹط¹ (ط¬.ظ…)</label>
                   <input type="number" min="0" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} required />
                 </div>
                 <div>
-                  <label>سعر التكلفة (ج.م)</label>
+                  <label>ط³ط¹ط± ط§ظ„طھظƒظ„ظپط© (ط¬.ظ…)</label>
                   <input type="number" min="0" value={productForm.costPrice} onChange={(e) => setProductForm({ ...productForm, costPrice: e.target.value })} />
                 </div>
                 <div>
-                  <label>الكمية بالمخزن</label>
+                  <label>ط§ظ„ظƒظ…ظٹط© ط¨ط§ظ„ظ…ط®ط²ظ†</label>
                   <input type="number" min="0" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} required />
                 </div>
               </div>
               <button type="submit" className="btn-primary" style={{ width: '100%', marginTop: 12, padding: 12, borderRadius: 10, fontWeight: 'bold' }}>
-                {editProduct ? '💾 حفظ التعديلات' : '+ إضافة المنتج'}
+                {editProduct ? 'ًں’¾ ط­ظپط¸ ط§ظ„طھط¹ط¯ظٹظ„ط§طھ' : '+ ط¥ط¶ط§ظپط© ط§ظ„ظ…ظ†طھط¬'}
               </button>
             </form>
           </div>
@@ -333,7 +333,7 @@ const Cashier = () => {
           <div style={{ marginBottom: 20 }}>
             <div style={{ position: 'relative', marginBottom: 14 }}>
               <input
-                placeholder="ابحث عن منتج بالاسم..."
+                placeholder="ط§ط¨ط­ط« ط¹ظ† ظ…ظ†طھط¬ ط¨ط§ظ„ط§ط³ظ…..."
                 value={search}
                 onChange={handleSearch}
                 style={{ width: '100%', padding: '12px 18px', borderRadius: 12, background: 'var(--bg-card)', border: '1px solid var(--border-color)', color: '#fff', fontSize: 14 }}
@@ -344,7 +344,7 @@ const Cashier = () => {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               {allCategories.map((cat) => {
                 const isActive = activeCategory === cat;
-                const icon = CATEGORY_ICONS[cat] || '🏷️';
+                const icon = CATEGORY_ICONS[cat] || 'ًںڈ·ï¸ڈ';
                 const styleConfig = CATEGORY_COLORS[cat] || { bg: 'rgba(255,255,255,0.06)', text: 'var(--text-muted)', border: 'transparent', gradient: 'var(--primary)' };
                 
                 return (
@@ -420,7 +420,7 @@ const Cashier = () => {
                     alignItems: 'center',
                     gap: 4
                   }}>
-                    <span>{CATEGORY_ICONS[p.category] || '🏷️'}</span>
+                    <span>{CATEGORY_ICONS[p.category] || 'ًںڈ·ï¸ڈ'}</span>
                     <span>{p.category}</span>
                   </span>
 
@@ -438,7 +438,7 @@ const Cashier = () => {
                       padding: '3px 8px',
                       borderRadius: 20,
                       boxShadow: '0 2px 8px rgba(239,68,68,0.4)'
-                    }}>نفد من المخزن</span>
+                    }}>ظ†ظپط¯ ظ…ظ† ط§ظ„ظ…ط®ط²ظ†</span>
                   )}
 
                   {/* Product Visual Container */}
@@ -466,7 +466,7 @@ const Cashier = () => {
                       </h4>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div style={{ fontSize: 16, fontWeight: 900, color: '#22c55e' }}>
-                          {p.price} <span style={{ fontSize: 11, fontWeight: 'normal', color: 'var(--text-muted)' }}>ج.م</span>
+                          {p.price} <span style={{ fontSize: 11, fontWeight: 'normal', color: 'var(--text-muted)' }}>ط¬.ظ…</span>
                         </div>
                         <div style={{
                           fontSize: 11,
@@ -477,7 +477,7 @@ const Cashier = () => {
                           color: p.stock > 5 ? '#4ade80' : '#fbbf24',
                           border: p.stock > 5 ? '1px solid rgba(34, 197, 94, 0.2)' : '1px solid rgba(245, 158, 11, 0.3)'
                         }}>
-                          متاح: {p.stock}
+                          ظ…طھط§ط­: {p.stock}
                         </div>
                       </div>
                     </div>
@@ -508,7 +508,7 @@ const Cashier = () => {
                       }}
                     >
                       <PencilSquareIcon style={{ width: 14, height: 14 }} />
-                      تعديل
+                      طھط¹ط¯ظٹظ„
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); setProductToDelete(p); }}
@@ -530,7 +530,7 @@ const Cashier = () => {
                       }}
                     >
                       <TrashIcon style={{ width: 14, height: 14 }} />
-                      حذف
+                      ط­ط°ظپ
                     </button>
                   </div>
                 </div>
@@ -539,7 +539,7 @@ const Cashier = () => {
             {products.length === 0 && (
               <div style={{ color: 'var(--text-muted)', fontSize: 14, gridColumn: '1/-1', textAlign: 'center', padding: '50px 20px', background: 'var(--bg-card)', borderRadius: 16, border: '1px dashed var(--border-color)' }}>
                 <ShoppingBagIcon style={{ width: 44, height: 44, margin: '0 auto 10px', color: 'var(--text-muted)' }} />
-                <div>لا توجد منتجات في هذه الفئة حتى الآن</div>
+                <div>ظ„ط§ طھظˆط¬ط¯ ظ…ظ†طھط¬ط§طھ ظپظٹ ظ‡ط°ظ‡ ط§ظ„ظپط¦ط© ط­طھظ‰ ط§ظ„ط¢ظ†</div>
               </div>
             )}
           </div>
@@ -552,11 +552,11 @@ const Cashier = () => {
               <div style={{ width: 38, height: 38, borderRadius: 12, background: 'linear-gradient(135deg, rgba(255,87,70,0.25), rgba(255,87,70,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', boxShadow: '0 2px 10px rgba(255,87,70,0.25)' }}>
                 <ShoppingCartIcon style={{ width: 22, height: 22 }} />
               </div>
-              <h2 style={{ fontSize: 16, fontWeight: 'bold', margin: 0, color: '#fff' }}>الفاتورة / سلة المشتريات</h2>
+              <h2 style={{ fontSize: 16, fontWeight: 'bold', margin: 0, color: '#fff' }}>ط§ظ„ظپط§طھظˆط±ط© / ط³ظ„ط© ط§ظ„ظ…ط´طھط±ظٹط§طھ</h2>
             </div>
             {cart.length > 0 && (
               <span className="badge badge-primary" style={{ fontSize: 11, background: 'var(--primary)', color: '#fff', padding: '4px 10px' }}>
-                {cart.reduce((s, i) => s + i.quantity, 0)} قطعة
+                {cart.reduce((s, i) => s + i.quantity, 0)} ظ‚ط·ط¹ط©
               </span>
             )}
           </div>
@@ -568,9 +568,9 @@ const Cashier = () => {
               marginBottom: 14,
               fontSize: 13,
               fontWeight: 'bold',
-              background: message.includes('✅') ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-              color: message.includes('✅') ? '#4ade80' : '#f87171',
-              border: message.includes('✅') ? '1px solid rgba(34, 197, 94, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
+              background: message.includes('âœ…') ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+              color: message.includes('âœ…') ? '#4ade80' : '#f87171',
+              border: message.includes('âœ…') ? '1px solid rgba(34, 197, 94, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
               textAlign: 'center'
             }}>
               {message}
@@ -585,23 +585,23 @@ const Cashier = () => {
                 <span className="qty-value">{i.quantity}</span>
                 <button onClick={() => updateQty(i.productId, i.quantity + 1)}>+</button>
               </div>
-              <span className="cart-item-price" style={{ fontWeight: 'bold', color: '#22c55e' }}>{i.price * i.quantity} ج.م</span>
+              <span className="cart-item-price" style={{ fontWeight: 'bold', color: '#22c55e' }}>{i.price * i.quantity} ط¬.ظ…</span>
             </div>
           ))}
           {cart.length === 0 && (
             <div style={{ textAlign: 'center', padding: '30px 10px', color: 'var(--text-muted)', fontSize: 13 }}>
               <ShoppingCartIcon style={{ width: 36, height: 36, margin: '0 auto 8px', opacity: 0.5 }} />
-              <div>السلة فارغة، اضغط على أي منتج لإضافته</div>
+              <div>ط§ظ„ط³ظ„ط© ظپط§ط±ط؛ط©طŒ ط§ط¶ط؛ط· ط¹ظ„ظ‰ ط£ظٹ ظ…ظ†طھط¬ ظ„ط¥ط¶ط§ظپطھظ‡</div>
             </div>
           )}
 
           <div className="cart-total" style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border-color)' }}>
-            <span className="val" style={{ fontSize: 20, color: '#22c55e', fontWeight: 900 }}>{total} ج.م</span>
-            <span style={{ fontWeight: 'bold' }}>الإجمالي:</span>
+            <span className="val" style={{ fontSize: 20, color: '#22c55e', fontWeight: 900 }}>{total} ط¬.ظ…</span>
+            <span style={{ fontWeight: 'bold' }}>ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ:</span>
           </div>
 
-          <label style={{ marginTop: 14, display: 'block', fontSize: 13, color: 'var(--text-muted)' }}>ملاحظات (مثال: دفع فيزا / نقدي)</label>
-          <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="اكتب أي ملاحظات هنا..." style={{ width: '100%', marginTop: 4 }} />
+          <label style={{ marginTop: 14, display: 'block', fontSize: 13, color: 'var(--text-muted)' }}>ظ…ظ„ط§ط­ط¸ط§طھ (ظ…ط«ط§ظ„: ط¯ظپط¹ ظپظٹط²ط§ / ظ†ظ‚ط¯ظٹ)</label>
+          <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="ط§ظƒطھط¨ ط£ظٹ ظ…ظ„ط§ط­ط¸ط§طھ ظ‡ظ†ط§..." style={{ width: '100%', marginTop: 4 }} />
 
           <button
             className="btn-checkout"
@@ -627,7 +627,7 @@ const Cashier = () => {
             }}
           >
             <CheckIcon style={{ width: 18, height: 18 }} />
-            تأكيد الدفع ({total} ج.م)
+            طھط£ظƒظٹط¯ ط§ظ„ط¯ظپط¹ ({total} ط¬.ظ…)
           </button>
         </div>
       </div>
@@ -636,19 +636,19 @@ const Cashier = () => {
       <ConfirmModal
         open={!!productToDelete}
         type="danger"
-        title="تأكيد حذف المنتج"
+        title="طھط£ظƒظٹط¯ ط­ط°ظپ ط§ظ„ظ…ظ†طھط¬"
         message={
           <span>
-            هل أنت متأكد من حذف المنتج{' '}
-            <strong style={{ color: '#fff' }}>"{productToDelete?.name}"</strong> نهائياً من المتجر؟
+            ظ‡ظ„ ط£ظ†طھ ظ…طھط£ظƒط¯ ظ…ظ† ط­ط°ظپ ط§ظ„ظ…ظ†طھط¬{' '}
+            <strong style={{ color: '#fff' }}>"{productToDelete?.name}"</strong> ظ†ظ‡ط§ط¦ظٹط§ظ‹ ظ…ظ† ط§ظ„ظ…طھط¬ط±طں
             <br />
             <span style={{ fontSize: '13px', opacity: 0.85, color: '#f87171', display: 'block', marginTop: '6px' }}>
-              لن يمكنك التراجع عن هذه الخطوة.
+              ظ„ظ† ظٹظ…ظƒظ†ظƒ ط§ظ„طھط±ط§ط¬ط¹ ط¹ظ† ظ‡ط°ظ‡ ط§ظ„ط®ط·ظˆط©.
             </span>
           </span>
         }
-        confirmText="نعم، احذف"
-        cancelText="إلغاء"
+        confirmText="ظ†ط¹ظ…طŒ ط§ط­ط°ظپ"
+        cancelText="ط¥ظ„ط؛ط§ط،"
         onConfirm={handleConfirmDeleteProduct}
         onCancel={() => setProductToDelete(null)}
       />
@@ -657,3 +657,4 @@ const Cashier = () => {
 };
 
 export default Cashier;
+
