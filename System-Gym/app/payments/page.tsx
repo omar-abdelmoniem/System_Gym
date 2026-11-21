@@ -1,0 +1,727 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import api from '../../lib/axios';
+import { useFastQuery, mutate } from '../../lib/swr';
+import ConfirmModal from '../../components/ConfirmModal';
+import {
+  BanknotesIcon,
+  ReceiptRefundIcon,
+  ArrowTrendingUpIcon,
+  ArrowTrendingDownIcon,
+  ChartBarIcon,
+  ClipboardDocumentListIcon,
+  MagnifyingGlassIcon,
+  ListBulletIcon
+} from '@heroicons/react/24/outline';
+
+const Payments = () => {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'payments'>('dashboard');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+
+  // SWR Cached collections
+  const { data: memRes, mutate: mutateMembers } = useFastQuery('/members');
+  const { data: coachRes, mutate: mutateCoaches } = useFastQuery('/coaches');
+  const { data: payRes, mutate: mutatePayments } = useFastQuery('/payments');
+
+  const memList: any[] = Array.isArray(memRes) ? memRes : (memRes?.data || []);
+  const members: any[] = memList.filter((m: any) => m.active !== false);
+  const coaches: any[] = Array.isArray(coachRes) ? coachRes : (coachRes?.data || []);
+  const payments: any[] = Array.isArray(payRes) ? payRes : (payRes?.data || []);
+
+  // Tab 1: Financial Dashboard State
+  const [dateRange, setDateRange] = useState('today');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [dashboardStats, setDashboardStats] = useState<any>(null);
+  const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
+
+  // Transaction Filters
+  const [txFilters, setTxFilters] = useState({
+    type: '',
+    category: '',
+    method: '',
+    memberId: '',
+    coachId: ''
+  });
+  const [filteredTransactions, setFilteredTransactions] = useState<any[]>([]);
+
+  // Tab 2: Payments State
+  const [memberSubs, setMemberSubs] = useState<any[]>([]);
+  const [form, setForm] = useState({
+    memberId: '',
+    subscriptionId: '',
+    amount: '',
+    paidAmount: '',
+    paymentMethod: 'CASH',
+    notes: ''
+  });
+
+  const loadData = async () => {
+    mutateMembers();
+    mutateCoaches();
+    mutatePayments();
+    fetchDashboardStats(dateRange, customFrom, customTo);
+    fetchTransactions();
+  };
+
+  const fetchDashboardStats = async (range: string, fromStr?: string, toStr?: string) => {
+    try {
+      const params: any = { dateRange: range };
+      if (range === 'custom') {
+        if (fromStr) params.from = fromStr;
+        if (toStr) params.to = toStr;
+      }
+      const { data } = await api.get('/transactions/dashboard', { params });
+      setDashboardStats(data.data.rangeStats);
+      setRecentTransactions(data.data.recent || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchTransactions = async () => {
+    try {
+      const params: any = {};
+      if (txFilters.type) params.type = txFilters.type;
+      if (txFilters.category) params.category = txFilters.category;
+      if (txFilters.method) params.method = txFilters.method;
+      if (txFilters.memberId) params.memberId = txFilters.memberId;
+      if (txFilters.coachId) params.coachId = txFilters.coachId;
+      
+      // Fetch filtered list
+      const { data } = await api.get('/transactions', { params });
+      setFilteredTransactions(data.data || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  useEffect(() => {
+    fetchTransactions();
+  }, [txFilters]);
+
+  const handleRangeChange = async (range: string) => {
+    setDateRange(range);
+    if (range !== 'custom') {
+      await fetchDashboardStats(range);
+    }
+  };
+
+  const handleCustomRangeSubmit = async (e: any) => {
+    e.preventDefault();
+    await fetchDashboardStats('custom', customFrom, customTo);
+  };
+
+  const handleMemberChange = async (memberId: string) => {
+    setForm({ ...form, memberId, subscriptionId: '' });
+    if (memberId) {
+      try {
+        const { data } = await api.get('/subscriptions', { params: { memberId } });
+        setMemberSubs(Array.isArray(data) ? data : (data.data || []));
+      } catch {
+        setMemberSubs([]);
+      }
+    } else {
+      setMemberSubs([]);
+    }
+  };
+
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmConfig, setConfirmConfig] = useState<{
+    title: string;
+    message: React.ReactNode;
+    type?: 'danger' | 'success' | 'warning' | 'info';
+    action: () => void;
+  }>({ title: '', message: '', action: () => {} });
+
+  const [alertModal, setAlertModal] = useState<{
+    open: boolean;
+    title: string;
+    message: string;
+    type: 'danger' | 'success' | 'warning' | 'info';
+  }>({ open: false, title: '', message: '', type: 'warning' });
+
+  const showAlert = (title: string, message: string, type: 'danger' | 'success' | 'warning' | 'info' = 'warning') => {
+    setAlertModal({ open: true, title, message, type });
+  };
+
+  const [payRemainingTarget, setPayRemainingTarget] = useState<any>(null);
+  const [payRemainingAmount, setPayRemainingAmount] = useState('');
+  const [payRemainingMethod, setPayRemainingMethod] = useState('CASH');
+
+  const handleSubmitPayment = (e: any) => {
+    e.preventDefault();
+    const totalAmount = Number(form.amount);
+    const paidAmount = Number(form.paidAmount);
+
+    if (totalAmount < 0 || paidAmount < 0) {
+      showAlert('تنبيـه', 'المبالغ المالية لا يمكن أن تكون سالبة', 'warning');
+      return;
+    }
+
+    if (paidAmount > totalAmount) {
+      showAlert('تنبيـه', 'المبلغ المدفوع لا يمكن أن يكون أكبر من إجمالي المبلغ', 'warning');
+      return;
+    }
+
+    setConfirmConfig({
+      title: 'تأكيد تسجيل الدفعة',
+      type: 'info',
+      message: (
+        <span>
+          هل أنت متأكد من تسجيل دفعة مالية بقيمة <strong className="confirm-highlight">{paidAmount} ج.م</strong> من أصل <strong className="confirm-highlight">{totalAmount} ج.م</strong>؟
+        </span>
+      ),
+      action: async () => {
+        try {
+          await api.post('/payments', {
+            memberId: form.memberId,
+            subscriptionId: form.subscriptionId || undefined,
+            amount: totalAmount,
+            paidAmount,
+            paymentMethod: form.paymentMethod,
+            notes: form.notes,
+          });
+          setMessage('✅ تم تسجيل الدفعة بنجاح');
+          setForm({ memberId: '', subscriptionId: '', amount: '', paidAmount: '', paymentMethod: 'CASH', notes: '' });
+          setMemberSubs([]);
+          await loadData();
+          setTimeout(() => setMessage(''), 3000);
+        } catch (err: any) {
+          showAlert('خطأ', err.response?.data?.message || 'حدث خطأ أثناء تسجيل الدفعة', 'danger');
+        }
+      }
+    });
+    setConfirmOpen(true);
+  };
+
+  const handleOpenPayRemaining = (payment: any) => {
+    setPayRemainingTarget(payment);
+    setPayRemainingAmount(String(payment.remainingAmount || ''));
+    setPayRemainingMethod('CASH');
+  };
+
+  const handleConfirmPayRemaining = async () => {
+    if (!payRemainingTarget) return;
+    const amount = Number(payRemainingAmount);
+
+    if (isNaN(amount) || amount <= 0) {
+      showAlert('خطأ في المبلغ', 'يرجى إدخال مبلغ صحيح أكبر من الصفر', 'warning');
+      return;
+    }
+
+    if (amount > payRemainingTarget.remainingAmount) {
+      showAlert('خطأ في المبلغ', 'المبلغ المدفوع يتجاوز المبلغ المتبقي المطلوب', 'warning');
+      return;
+    }
+
+    const payment = payRemainingTarget;
+    const method = payRemainingMethod;
+    setPayRemainingTarget(null);
+
+    setConfirmConfig({
+      title: 'تأكيد سداد المبلغ المتبقي',
+      type: 'success',
+      message: (
+        <span>
+          هل أنت متأكد من سداد مبلغ بقيمة <strong className="confirm-highlight">{amount} ج.م</strong> بطريقة <strong className="confirm-highlight">{methodLabels[method] || method}</strong>؟
+        </span>
+      ),
+      action: async () => {
+        try {
+          await api.post(`/payments/${payment._id}/pay-remaining`, {
+            amountPaid: amount,
+            paymentMethod: method,
+          });
+          setMessage("✅ تم سداد المبلغ بنجاح!");
+          await loadData();
+          setTimeout(() => setMessage(''), 3000);
+        } catch (err: any) {
+          showAlert('فشل السداد', err.response?.data?.message || err.message, 'danger');
+        }
+      }
+    });
+    setConfirmOpen(true);
+  };
+
+  const remaining = (Number(form.amount) || 0) - (Number(form.paidAmount) || 0);
+
+  const methodLabels: any = {
+    CASH: 'كاش',
+    CARD: 'بطاقة',
+    BANK_TRANSFER: 'تحويل بنكي',
+    ONLINE: 'أونلاين',
+    OTHER: 'أخرى'
+  };
+
+  const categoryLabels: any = {
+    subscription: 'اشتراك عضو',
+    renewal: 'تجديد اشتراك',
+    coach_salary: 'راتب كابتن',
+    rent: 'إيجار',
+    equipment: 'معدات الجيم',
+    electricity: 'كهرباء',
+    water: 'مياه',
+    maintenance: 'صيانة',
+    other: 'أخرى'
+  };
+
+  const statusBadge = (s: string) => s === 'PAID' ? 'badge-success' : s === 'PARTIAL' ? 'badge-warning' : 'badge-danger';
+  const statusLabel = (s: string) => s === 'PAID' ? 'مدفوع' : s === 'PARTIAL' ? 'جزئي' : s === 'PENDING' ? 'معلق' : 'مرتجع';
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button 
+            className={activeTab === 'dashboard' ? 'btn-primary' : 'btn-secondary'} 
+            onClick={() => setActiveTab('dashboard')}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            <ChartBarIcon style={{ width: '18px', height: '18px' }} /> لوحة التحكم المالية
+          </button>
+          <button 
+            className={activeTab === 'payments' ? 'btn-primary' : 'btn-secondary'} 
+            onClick={() => setActiveTab('payments')}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            <BanknotesIcon style={{ width: '18px', height: '18px' }} /> تسجيل وإدارة المقبوضات
+          </button>
+        </div>
+        <h1>إدارة المالية والمدفوعات</h1>
+      </div>
+
+      {activeTab === 'dashboard' && (
+        <div>
+          {/* Range filter selector */}
+          <div className="form-card" style={{ marginBottom: '20px' }}>
+            <h3 style={{ marginBottom: '12px' }}>تحديد النطاق الزمني</h3>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+              {['today', 'yesterday', 'week', 'month', 'custom'].map((range) => (
+                <button
+                  key={range}
+                  onClick={() => handleRangeChange(range)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    border: dateRange === range ? 'none' : '1px solid var(--border-color)',
+                    background: dateRange === range ? 'var(--primary)' : 'transparent',
+                    color: dateRange === range ? '#fff' : 'var(--text-muted)',
+                    cursor: 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  {range === 'today' ? 'اليوم' : range === 'yesterday' ? 'أمس' : range === 'week' ? 'هذا الأسبوع' : range === 'month' ? 'هذا الشهر' : 'فترة مخصصة'}
+                </button>
+              ))}
+            </div>
+
+            {dateRange === 'custom' && (
+              <form onSubmit={handleCustomRangeSubmit} style={{ display: 'flex', gap: '10px', marginTop: '12px', alignItems: 'flex-end' }}>
+                <div>
+                  <label>من تاريخ</label>
+                  <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} required />
+                </div>
+                <div>
+                  <label>إلى تاريخ</label>
+                  <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} required />
+                </div>
+                <button type="submit" style={{ height: '42px' }}>تطبيق</button>
+              </form>
+            )}
+          </div>
+
+          {/* Stats Cards */}
+          {dashboardStats && (
+            <div className="cards-grid" style={{ marginBottom: '24px' }}>
+              <div 
+                className="stat-card"
+                style={{
+                  position: 'relative',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  padding: '20px',
+                  borderRadius: '16px',
+                  background: 'var(--bg-card)',
+                  border: '1px solid rgba(34, 197, 94, 0.25)',
+                  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.2)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+                  <div className="stat-label" style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-muted)' }}>
+                    إجمالي المقبوضات (Income)
+                  </div>
+                  <div style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '12px',
+                    background: 'linear-gradient(135deg, rgba(34,197,94,0.25), rgba(34,197,94,0.08))',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#22c55e',
+                    boxShadow: '0 4px 14px rgba(34,197,94,0.2)'
+                  }}>
+                    <BanknotesIcon style={{ width: '22px', height: '22px' }} />
+                  </div>
+                </div>
+                <div className="stat-value" style={{ color: '#22c55e', fontSize: '26px', fontWeight: 'bold' }}>
+                  {dashboardStats.income?.toLocaleString() || 0} <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 'normal' }}>ج.م</span>
+                </div>
+              </div>
+
+              <div 
+                className="stat-card"
+                style={{
+                  position: 'relative',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  padding: '20px',
+                  borderRadius: '16px',
+                  background: 'var(--bg-card)',
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.2)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+                  <div className="stat-label" style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-muted)' }}>
+                    إجمالي المصروفات (Expenses)
+                  </div>
+                  <div style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '12px',
+                    background: 'linear-gradient(135deg, rgba(239,68,68,0.25), rgba(239,68,68,0.08))',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#ef4444',
+                    boxShadow: '0 4px 14px rgba(239,68,68,0.2)'
+                  }}>
+                    <ReceiptRefundIcon style={{ width: '22px', height: '22px' }} />
+                  </div>
+                </div>
+                <div className="stat-value" style={{ color: '#ef4444', fontSize: '26px', fontWeight: 'bold' }}>
+                  {dashboardStats.expense?.toLocaleString() || 0} <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 'normal' }}>ج.م</span>
+                </div>
+              </div>
+
+              <div 
+                className="stat-card"
+                style={{
+                  position: 'relative',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  padding: '20px',
+                  borderRadius: '16px',
+                  background: 'var(--bg-card)',
+                  border: `1px solid ${dashboardStats.netProfit >= 0 ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)'}`,
+                  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.2)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+                  <div className="stat-label" style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-muted)' }}>
+                    صافي الأرباح (Net Profit)
+                  </div>
+                  <div style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '12px',
+                    background: dashboardStats.netProfit >= 0 ? 'linear-gradient(135deg, rgba(16,185,129,0.25), rgba(16,185,129,0.08))' : 'linear-gradient(135deg, rgba(239,68,68,0.25), rgba(239,68,68,0.08))',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: dashboardStats.netProfit >= 0 ? '#10b981' : '#ef4444',
+                    boxShadow: `0 4px 14px ${dashboardStats.netProfit >= 0 ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`
+                  }}>
+                    {dashboardStats.netProfit >= 0 ? (
+                      <ArrowTrendingUpIcon style={{ width: '22px', height: '22px' }} />
+                    ) : (
+                      <ArrowTrendingDownIcon style={{ width: '22px', height: '22px' }} />
+                    )}
+                  </div>
+                </div>
+                <div className="stat-value" style={{ color: dashboardStats.netProfit >= 0 ? '#10b981' : '#ef4444', fontSize: '26px', fontWeight: 'bold' }}>
+                  {dashboardStats.netProfit?.toLocaleString() || 0} <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 'normal' }}>ج.م</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Filter Transactions Section */}
+          <div className="form-card" style={{ marginBottom: '20px' }}>
+            <h3 style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}><MagnifyingGlassIcon style={{ width: '18px', height: '18px' }} /> فلترة المعاملات</h3>
+            <div className="form-row">
+              <div>
+                <label>النوع</label>
+                <select value={txFilters.type} onChange={e => setTxFilters({ ...txFilters, type: e.target.value })}>
+                  <option value="">الكل</option>
+                  <option value="income">مقبوضات (Income)</option>
+                  <option value="expense">مصروفات (Expense)</option>
+                </select>
+              </div>
+              <div>
+                <label>التصنيف</label>
+                <select value={txFilters.category} onChange={e => setTxFilters({ ...txFilters, category: e.target.value })}>
+                  <option value="">الكل</option>
+                  <option value="subscription">اشتراكات</option>
+                  <option value="coach_salary">رواتب كباتن</option>
+                  <option value="rent">إيجارات</option>
+                  <option value="equipment">معدات</option>
+                  <option value="electricity">كهرباء</option>
+                  <option value="water">مياه</option>
+                  <option value="maintenance">صيانة</option>
+                  <option value="other">أخرى</option>
+                </select>
+              </div>
+              <div>
+                <label>العضو</label>
+                <select value={txFilters.memberId} onChange={e => setTxFilters({ ...txFilters, memberId: e.target.value })}>
+                  <option value="">الكل ({members.length} عضو)</option>
+                  {members.map(m => (
+                    <option key={m._id} value={m._id}>
+                      {m.name} {m.shiftType === 'GIRLS' ? '(🌸 بنات)' : m.shiftType === 'BOYS' ? '(🏋️‍♂️ شباب)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label>الكابتن</label>
+                <select value={txFilters.coachId} onChange={e => setTxFilters({ ...txFilters, coachId: e.target.value })}>
+                  <option value="">الكل</option>
+                  {coaches.map(c => <option key={c._id} value={c._id}>{c.name}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Filtered Transactions List */}
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><ListBulletIcon style={{ width: '18px', height: '18px' }} /> سجل المعاملات المالية</h3>
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>التاريخ</th>
+                  <th>النوع</th>
+                  <th>التصنيف</th>
+                  <th>المستفيد / العضو</th>
+                  <th>المبلغ</th>
+                  <th>طريقة الدفع</th>
+                  <th>الوصف / ملاحظات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTransactions.map((tx) => (
+                  <tr key={tx._id}>
+                    <td>{new Date(tx.date).toLocaleDateString('ar-EG')}</td>
+                    <td style={{ fontWeight: 'bold', color: tx.type === 'income' ? 'var(--success)' : 'var(--danger)' }}>
+                      {tx.type === 'income' ? '📥 إيراد' : '📤 مصروف'}
+                    </td>
+                    <td>{categoryLabels[tx.category] || tx.category}</td>
+                    <td>{tx.memberId?.name || tx.coachId?.name || '-'}</td>
+                    <td style={{ fontWeight: 'bold', color: tx.type === 'income' ? 'var(--success)' : 'var(--danger)' }}>
+                      {tx.amount?.toLocaleString()} ج.م
+                    </td>
+                    <td>{methodLabels[tx.paymentMethod] || tx.paymentMethod}</td>
+                    <td>{tx.description || tx.notes || '-'}</td>
+                  </tr>
+                ))}
+                {filteredTransactions.length === 0 && (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>لا توجد معاملات مطابقة للفلترة</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'payments' && (
+        <div>
+          {/* Add Payment Form */}
+          <form className="form-card" onSubmit={handleSubmitPayment} style={{ marginBottom: '24px' }}>
+            <h3 style={{ marginBottom: '16px' }}>تسجيل مقبوضات جديدة</h3>
+            <div className="form-row">
+              <div>
+                <label>العضو</label>
+                <select value={form.memberId} onChange={(e) => handleMemberChange(e.target.value)} required>
+                  <option value="">{members.length > 0 ? `اختر عضو (${members.length} عضو متاح)` : 'اختر عضو'}</option>
+                  {members.map(m => (
+                    <option key={m._id} value={m._id}>
+                      {m.name} — {m.phone} {m.shiftType === 'GIRLS' ? '(🌸 شفت البنات)' : m.shiftType === 'BOYS' ? '(🏋️‍♂️ شفت الشباب)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label>الاشتراك (اختياري)</label>
+                <select value={form.subscriptionId} onChange={(e) => setForm({ ...form, subscriptionId: e.target.value })}>
+                  <option value="">بدون اشتراك</option>
+                  {memberSubs.map(s => <option key={s._id} value={s._id}>{s.plan?.name || 'اشتراك'} - {s.status}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="form-row">
+              <div>
+                <label>المبلغ الإجمالي</label>
+                <input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required min="0" />
+              </div>
+              <div>
+                <label>المبلغ المدفوع</label>
+                <input type="number" value={form.paidAmount} onChange={(e) => setForm({ ...form, paidAmount: e.target.value })} required min="0" />
+              </div>
+            </div>
+            {form.amount && form.paidAmount && (
+              <div style={{ padding: '10px', background: 'var(--bg-input)', borderRadius: '8px', marginBottom: '12px', textAlign: 'center' }}>
+                المتبقي: <strong style={{ color: remaining > 0 ? 'var(--warning)' : 'var(--success)' }}>{remaining} ج.م</strong>
+              </div>
+            )}
+            <div className="form-row">
+              <div>
+                <label>طريقة الدفع</label>
+                <select value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value })}>
+                  <option value="CASH">كاش</option>
+                  <option value="CARD">بطاقة</option>
+                  <option value="BANK_TRANSFER">تحويل بنكي</option>
+                  <option value="ONLINE">أونلاين</option>
+                  <option value="OTHER">أخرى</option>
+                </select>
+              </div>
+              <div>
+                <label>ملاحظات</label>
+                <input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+              </div>
+            </div>
+            <button type="submit">تسجيل الدفعة</button>
+            {message && <div className="message" style={{ marginTop: '12px' }}>{message}</div>}
+          </form>
+
+          {/* Payments Table */}
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><ListBulletIcon style={{ width: '18px', height: '18px' }} /> المقبوضات المسجلة للعملاء</h3>
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>العضو</th>
+                  <th>المبلغ الإجمالي</th>
+                  <th>المدفوع</th>
+                  <th>المتبقي</th>
+                  <th>الطريقة</th>
+                  <th>الحالة</th>
+                  <th>التاريخ</th>
+                  <th style={{ textAlign: 'center' }}>الإجراءات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map(p => (
+                  <tr key={p._id}>
+                    <td style={{ fontWeight: 'bold' }}>{p.member?.name || '-'}</td>
+                    <td>{p.amount?.toLocaleString()} ج.م</td>
+                    <td style={{ color: 'var(--success)', fontWeight: 'bold' }}>{p.paidAmount?.toLocaleString()} ج.م</td>
+                    <td style={{ color: p.remainingAmount > 0 ? 'var(--warning)' : 'var(--text-muted)' }}>{p.remainingAmount?.toLocaleString()} ج.م</td>
+                    <td>{methodLabels[p.paymentMethod] || p.paymentMethod}</td>
+                    <td><span className={'badge ' + statusBadge(p.status)}>{statusLabel(p.status)}</span></td>
+                    <td>{new Date(p.paymentDate).toLocaleDateString('ar-EG')}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      {p.remainingAmount > 0 ? (
+                        <button className="btn-small" onClick={() => handleOpenPayRemaining(p)}>
+                          💵 سداد المتبقي
+                        </button>
+                      ) : (
+                        <span style={{ color: 'var(--success)', fontSize: '13px' }}>✓ مكتمل</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {payments.length === 0 && (
+                  <tr>
+                    <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>لا توجد مدفوعات مسجلة</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Pay Remaining Modal */}
+      {payRemainingTarget && (
+        <ConfirmModal
+          open={true}
+          type="info"
+          title="سداد المبلغ المتبقي"
+          message={`العضو: ${payRemainingTarget.member?.name || ''} — المتبقي الحالي: ${payRemainingTarget.remainingAmount} ج.م`}
+          confirmText="متابعة السداد"
+          cancelText="إلغاء"
+          onConfirm={handleConfirmPayRemaining}
+          onCancel={() => setPayRemainingTarget(null)}
+        >
+          <div style={{ textAlign: 'right', marginTop: '12px' }}>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--text-muted)' }}>المبلغ المراد سداده (ج.م)</label>
+            <input
+              type="number"
+              min="1"
+              max={payRemainingTarget.remainingAmount}
+              value={payRemainingAmount}
+              onChange={(e) => setPayRemainingAmount(e.target.value)}
+              style={{ width: '100%', padding: '10px', borderRadius: '8px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: '#fff', marginBottom: '12px' }}
+            />
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: 'var(--text-muted)' }}>طريقة الدفع</label>
+            <select
+              value={payRemainingMethod}
+              onChange={(e) => setPayRemainingMethod(e.target.value)}
+              style={{ width: '100%', padding: '10px', borderRadius: '8px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: '#fff' }}
+            >
+              <option value="CASH">كاش</option>
+              <option value="CARD">بطاقة</option>
+              <option value="BANK_TRANSFER">تحويل بنكي</option>
+              <option value="ONLINE">أونلاين</option>
+              <option value="OTHER">أخرى</option>
+            </select>
+          </div>
+        </ConfirmModal>
+      )}
+
+      {/* Alert Modal */}
+      <ConfirmModal
+        open={alertModal.open}
+        type={alertModal.type}
+        title={alertModal.title}
+        message={alertModal.message}
+        confirmText="حسناً"
+        cancelText={null}
+        onConfirm={() => setAlertModal(prev => ({ ...prev, open: false }))}
+      />
+
+      {/* Confirm Action Modal */}
+      <ConfirmModal
+        open={confirmOpen}
+        type={confirmConfig.type || 'info'}
+        title={confirmConfig.title}
+        message={confirmConfig.message}
+        confirmText="تأكيد"
+        cancelText="إلغاء"
+        onConfirm={() => {
+          setConfirmOpen(false);
+          confirmConfig.action();
+        }}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    </div>
+  );
+};
+
+export default Payments;

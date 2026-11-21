@@ -1,0 +1,713 @@
+import { Request, Response } from 'express';
+import mongoose from 'mongoose';
+import Attendance from '../models/Attendance';
+import Member from '../models/Member';
+import Subscription from '../models/Subscription';
+import { sendWhatsApp, templates } from '../services/whatsapp.service';
+import { getShiftFilter, canAccessShift, AuthCashier } from '../middleware/auth';
+import { getBusinessDateString, getCairoNow, getBusinessDayBounds, getBusinessMonthBounds } from '../utils/businessDay';
+
+const todayString = () => getBusinessDateString();
+
+
+// Arabic keyboard to English QWERTY character map
+const ARABIC_KEY_MAP: Record<string, string> = {
+  'ض': 'q', 'ص': 'w', 'ث': 'e', 'ق': 'r', 'ف': 't', 'غ': 'y', 'ع': 'u', 'ه': 'i', 'خ': 'o', 'ح': 'p', 'ج': '[', 'د': ']',
+  'ش': 'a', 'س': 's', 'ي': 'd', 'ب': 'f', 'ل': 'g', 'ا': 'h', 'ت': 'j', 'ن': 'k', 'م': 'l', 'ك': ';', 'ط': "'",
+  'ئ': 'z', 'ء': 'x', 'ؤ': 'c', 'ر': 'v', 'لا': 'b', 'ى': 'n', 'ة': 'm', 'و': ',', 'ز': '.', 'ظ': '/',
+};
+
+const decodeNumericAscii = (str: string): string => {
+  if (/^(\d{3})+$/.test(str) && str.length >= 12 && str.length % 3 === 0) {
+    let decoded = '';
+    for (let i = 0; i < str.length; i += 3) {
+      const code = parseInt(str.substring(i, i + 3), 10);
+      if (code >= 32 && code <= 126) {
+        decoded += String.fromCharCode(code);
+      } else {
+        return '';
+      }
+    }
+    return decoded;
+  }
+  return '';
+};
+
+const cleanQrToken = (rawInput: string): string => {
+  if (!rawInput) return '';
+  let str = String(rawInput).trim();
+  
+  // If it's a URL, extract the token
+  if (str.includes('/qr/')) {
+    const afterQr = str.split('/qr/').pop() || '';
+    str = afterQr.split('?')[0].split('#')[0].trim();
+  } else if (str.startsWith('http://') || str.startsWith('https://')) {
+    str = str.split('/').pop()?.split('?')[0].split('#')[0].trim() || str;
+  }
+
+  // Convert numeric ASCII sequence if sent by hardware scanner (e.g. 068098077... -> DbMIIHWxrBDp)
+  const asciiDecoded = decodeNumericAscii(str);
+  if (asciiDecoded) {
+    str = asciiDecoded;
+  }
+
+  // Convert Arabic keyboard letters to English
+  let converted = '';
+  for (const ch of str) {
+    converted += ARABIC_KEY_MAP[ch] || ch;
+  }
+  return converted.trim() || str;
+};
+
+// ─── QR Scan (smart: checkin → checkout toggle) ───────────────────────────────
+
+export const scanQR = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const rawToken = req.body.qrToken || req.body.code || req.body.qrCode;
+    if (!rawToken) return res.status(400).json({ success: false, message: 'رمز الـ QR مطلوب' });
+
+    const rawStr = String(rawToken).trim();
+    const token = cleanQrToken(rawStr);
+    const decodedAscii = decodeNumericAscii(rawStr);
+
+    console.log('[QR SCAN] rawToken:', JSON.stringify(rawToken));
+    console.log('[QR SCAN] cleanedToken:', JSON.stringify(token));
+    if (decodedAscii) console.log('[QR SCAN] decodedAscii:', JSON.stringify(decodedAscii));
+
+    const searchTokens = Array.from(new Set([token, decodedAscii, rawStr].filter(Boolean)));
+
+    // 1. Find member by qrToken field (checking cleaned token, decoded ascii, or raw token)
+    let member = await Member.findOne({ qrToken: { $in: searchTokens } });
+    if (!member) {
+      const regexPattern = `^(${searchTokens.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`;
+      member = await Member.findOne({ qrToken: { $regex: new RegExp(regexPattern, 'i') } });
+    }
+    if (!member) {
+      for (const t of searchTokens) {
+        if (mongoose.Types.ObjectId.isValid(t)) {
+          member = await Member.findById(t);
+          if (member) break;
+        }
+      }
+    }
+
+    console.log('[QR SCAN] member found:', member ? member.name : 'NOT FOUND');
+
+    if (!member) {
+      return res.status(404).json({ success: false, message: 'العضو غير موجود' });
+    }
+
+    // SHIFT CHECK — core security: cashier cannot scan members from other shift
+    if (!canAccessShift(cashier, member.shiftType)) {
+      return res.status(403).json({ success: false, message: 'هذا العضو لا ينتمي لشفتك' });
+    }
+
+    // Check if Member is active
+    if (!member.active) {
+      return res.status(403).json({ success: false, message: 'حساب العضو غير نشط' });
+    }
+
+    // Timezone & business day (rolls over at 03:00 AM)
+    const now = new Date();
+    const cairoTime = getCairoNow();
+    const today = getBusinessDateString();
+
+    // Check if QR is active
+    if (member.isQrActive === false) {
+      const lastSub = await Subscription.findOne({ member: member._id }).sort({ endDate: -1 });
+      if (lastSub) {
+        if (lastSub.subscriptionType === 'sessions' && lastSub.sessionsLimit > 0 && (lastSub.sessionsUsed || 0) >= lastSub.sessionsLimit) {
+          return res.status(422).json({
+            success: false,
+            message: `⚠️ تم استهلاك كامل الحصص (${lastSub.sessionsLimit}/${lastSub.sessionsLimit}) - يرجى تجديد الاشتراك`,
+            requiresRenewal: true,
+          });
+        }
+        if (lastSub.endDate && lastSub.endDate < now) {
+          const formattedEnd = new Date(lastSub.endDate).toLocaleDateString('ar-EG');
+          return res.status(422).json({
+            success: false,
+            message: `⚠️ انتهت صلاحية الاشتراك بتاريخ ${formattedEnd} - يرجى تجديد الاشتراك`,
+            requiresRenewal: true,
+          });
+        }
+      }
+      return res.status(403).json({ success: false, message: '⚠️ كود الـ QR مغلق لهذا العضو - يرجى مراجعة الاستقبال لتجديد الاشتراك' });
+    }
+
+    // Check for frozen subscription
+    const frozenSub = await Subscription.findOne({
+      member: member._id,
+      status: 'frozen',
+    });
+    if (frozenSub) {
+      return res.status(422).json({
+        success: false,
+        message: 'الاشتراك مجمد حالياً.',
+      });
+    }
+
+    // Verify active subscription (must have active status AND endDate >= now)
+    const activeSub = await Subscription.findOne({
+      member: member._id,
+      status: 'active',
+      endDate: { $gte: now },
+    }).sort({ endDate: -1 });
+
+    if (!activeSub) {
+      // Mark any outdated active subs as expired
+      await Subscription.updateMany(
+        { member: member._id, status: 'active', endDate: { $lt: now } },
+        { status: 'expired' }
+      );
+      // Auto-lock member QR code
+      member.isQrActive = false;
+      await member.save();
+
+      const lastSub = await Subscription.findOne({ member: member._id }).sort({ endDate: -1 });
+      const endDateStr = lastSub?.endDate ? new Date(lastSub.endDate).toLocaleDateString('ar-EG') : '';
+
+      return res.status(422).json({
+        success: false,
+        message: endDateStr
+          ? `⚠️ انتهت صلاحية الاشتراك بتاريخ ${endDateStr} - يرجى تجديد الاشتراك`
+          : '⚠️ لا يوجد اشتراك نشط لهذا العضو - يرجى تجديد الاشتراك لتفعيل الدخول',
+        requiresRenewal: true,
+      });
+    }
+
+    // Session-based: check remaining sessions BEFORE recording attendance
+    if (activeSub.subscriptionType === 'sessions' && activeSub.sessionsLimit > 0) {
+      if ((activeSub.sessionsUsed || 0) >= activeSub.sessionsLimit) {
+        // Exhausted — mark expired and lock QR
+        activeSub.status = 'expired';
+        await activeSub.save();
+        member.isQrActive = false;
+        await member.save();
+
+        return res.status(422).json({
+          success: false,
+          message: `انتهت جميع الحصص (${activeSub.sessionsLimit}/${activeSub.sessionsLimit})، يرجى تجديد الاشتراك.`,
+          requiresRenewal: true,
+        });
+      }
+    }
+
+    // Check if checked in today
+    const existing = await Attendance.findOne({
+      member: member._id,
+      date: today,
+    });
+
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: 'تم تسجيل حضور هذا العضو بالفعل اليوم',
+      });
+    }
+
+    // Record attendance — denormalize shiftType for fast queries
+    const attendanceRecord = await Attendance.create({
+      member:      member._id,
+      checkInTime: now,
+      date:        today,
+      qrToken:     token,
+      method:      'QR',
+      status:      'CHECKED_IN',
+      shiftType:   member.shiftType,
+    });
+
+    // Session-based: increment sessionsUsed after successful check-in
+    let sessionInfo: { sessionsUsed?: number; sessionsLimit?: number; sessionsRemaining?: number } = {};
+    if (activeSub.subscriptionType === 'sessions' && activeSub.sessionsLimit > 0) {
+      activeSub.sessionsUsed = (activeSub.sessionsUsed || 0) + 1;
+      // If this was the last session, expire automatically and lock QR
+      if (activeSub.sessionsUsed >= activeSub.sessionsLimit) {
+        activeSub.status = 'expired';
+        member.isQrActive = false;
+        await member.save();
+      }
+      await activeSub.save();
+      sessionInfo = {
+        sessionsUsed: activeSub.sessionsUsed,
+        sessionsLimit: activeSub.sessionsLimit,
+        sessionsRemaining: Math.max(0, activeSub.sessionsLimit - activeSub.sessionsUsed),
+      };
+    }
+
+    // Send WhatsApp Notification (Non-blocking)
+    if (member.phone) {
+      const timeStr = cairoTime.toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit', hour12: true });
+      sendWhatsApp(member.phone, templates.checkInSuccess(member.name, timeStr)).catch(e => console.error('[WhatsApp] checkin notification error:', e));
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'تم تسجيل الحضور بنجاح',
+      member: { id: member._id, name: member.name },
+      attendance: { checkIn: attendanceRecord.checkInTime, date: attendanceRecord.date },
+      ...(sessionInfo.sessionsLimit ? { sessionInfo } : {}),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+
+// ─── Manual check-in (by memberId, for reception use) ────────────────────────
+
+export const checkIn = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const { memberId } = req.body;
+    if (!memberId) return res.status(400).json({ message: 'معرّف العضو مطلوب' });
+
+    const member = await Member.findById(memberId);
+    if (!member) return res.status(404).json({ message: 'العضو مش موجود' });
+
+    if (!member.active) {
+      return res.status(403).json({ message: 'حساب العضو غير نشط' });
+    }
+
+    // SHIFT CHECK
+    if (!canAccessShift(cashier, member.shiftType)) {
+      return res.status(403).json({ message: 'This member does not belong to your shift' });
+    }
+
+    // Check frozen subscription
+    const frozenSub = await Subscription.findOne({ member: member._id, status: 'frozen' });
+    if (frozenSub) {
+      return res.status(422).json({ message: 'الاشتراك مجمد حالياً.' });
+    }
+
+    // Check active subscription (must have active status AND endDate >= now)
+    const now = new Date();
+    const activeSub = await Subscription.findOne({
+      member: member._id,
+      status: 'active',
+      endDate: { $gte: now },
+    }).sort({ endDate: -1 });
+
+    if (!activeSub) {
+      await Subscription.updateMany(
+        { member: member._id, status: 'active', endDate: { $lt: now } },
+        { status: 'expired' }
+      );
+      member.isQrActive = false;
+      await member.save();
+      const lastSub = await Subscription.findOne({ member: member._id }).sort({ endDate: -1 });
+      const endDateStr = lastSub?.endDate ? new Date(lastSub.endDate).toLocaleDateString('ar-EG') : '';
+      return res.status(422).json({
+        message: endDateStr
+          ? `⚠️ انتهت مدة الاشتراك بتاريخ ${endDateStr} - يرجى تجديد الاشتراك`
+          : '⚠️ لا يوجد اشتراك نشط لهذا العضو - يرجى تجديد الاشتراك',
+        requiresRenewal: true
+      });
+    }
+
+    // Check session limits
+    if (activeSub.subscriptionType === 'sessions' && activeSub.sessionsLimit > 0) {
+      if ((activeSub.sessionsUsed || 0) >= activeSub.sessionsLimit) {
+        activeSub.status = 'expired';
+        await activeSub.save();
+        member.isQrActive = false;
+        await member.save();
+                return res.status(422).json({
+          message: `⚠️ تم استهلاك جميع الحصص (${activeSub.sessionsLimit}/${activeSub.sessionsLimit}) - يرجى تجديد الاشتراك`,
+          requiresRenewal: true,
+        });
+      }
+    }
+
+    const cairoTime = getCairoNow();
+    const today = getBusinessDateString();
+
+    const existing = await Attendance.findOne({ member: memberId, date: today });
+    if (existing) {
+      return res.status(400).json({ message: '⚠️ هذا العضو مسجّل حضور بالفعل اليوم! لا يمكن تسجيل الحضور أكثر من مرة في اليوم الواحد.' });
+    }
+
+    const record = await Attendance.create({
+      member:      memberId,
+      checkInTime: now,
+      date:        today,
+      method:      'MANUAL',
+      status:      'open',
+      shiftType:   member.shiftType,
+    });
+
+    // Increment sessionsUsed if session-based
+    let sessionInfo: { sessionsUsed?: number; sessionsLimit?: number; sessionsRemaining?: number } = {};
+    if (activeSub.subscriptionType === 'sessions' && activeSub.sessionsLimit > 0) {
+      activeSub.sessionsUsed = (activeSub.sessionsUsed || 0) + 1;
+      if (activeSub.sessionsUsed >= activeSub.sessionsLimit) {
+        activeSub.status = 'expired';
+        member.isQrActive = false;
+        await member.save();
+      }
+      await activeSub.save();
+      sessionInfo = {
+        sessionsUsed: activeSub.sessionsUsed,
+        sessionsLimit: activeSub.sessionsLimit,
+        sessionsRemaining: Math.max(0, activeSub.sessionsLimit - activeSub.sessionsUsed),
+      };
+    }
+
+    // Send WhatsApp notification if available
+    if (member.phone) {
+      const timeStr = cairoTime.toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit', hour12: true });
+      sendWhatsApp(member.phone, templates.checkInSuccess(member.name, timeStr)).catch(e => console.error('[WhatsApp] checkin notification error:', e));
+    }
+
+    res.status(201).json({
+      ...record.toObject(),
+      ...(sessionInfo.sessionsLimit ? { sessionInfo } : {}),
+    });
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── Check-out ────────────────────────────────────────────────────────────────
+
+export const checkOut = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const today = todayString();
+    const memberId = req.body.memberId || req.params.memberId;
+    
+    if (!memberId) {
+      return res.status(400).json({ success: false, message: 'Missing memberId' });
+    }
+
+    const record = await Attendance.findOne({
+      member: memberId,
+      date:   today,
+      status: { $in: ['open', 'CHECKED_IN'] }
+    });
+
+    if (!record) {
+      return res.status(404).json({ success: false, message: 'No active check-in found' });
+    }
+
+    record.checkOutTime = new Date();
+    record.status       = 'CHECKED_OUT';
+    await record.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Check-out successful',
+      attendance: record
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── Get attendance list ──────────────────────────────────────────────────────
+
+export const getAttendance = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const { date, memberId } = req.query;
+    const query: any = {};
+
+    if (date) {
+      query.date = date as string;
+    }
+    if (memberId) query.member = memberId;
+
+    // Shift filter — cashier sees only their shift's attendance
+    const shiftFilter = getShiftFilter(cashier);
+    Object.assign(query, shiftFilter);
+
+    const records = await Attendance.find(query)
+      .populate('member', 'name phone qrToken')
+      .sort({ checkInTime: -1 })
+      .lean();
+
+    // Batch fetch all latest subscriptions for unique member IDs (1 DB query instead of N queries)
+    const memberIds = Array.from(
+      new Set(records.map((r: any) => r.member?._id?.toString()).filter(Boolean))
+    );
+
+    const subscriptions = memberIds.length > 0
+      ? await Subscription.find({ member: { $in: memberIds } }).sort({ endDate: -1 }).lean()
+      : [];
+
+    const subMap = new Map<string, any>();
+    for (const sub of subscriptions) {
+      const mId = sub.member?.toString();
+      if (mId && !subMap.has(mId)) {
+        subMap.set(mId, sub);
+      }
+    }
+
+    const now = new Date();
+    const recordsWithStatus = records.map((r: any) => {
+      if (!r.member) return r;
+      const mId = r.member._id?.toString();
+      const sub = subMap.get(mId);
+      let membershipStatus = 'Expired';
+      let sessionInfo = null;
+
+      if (sub) {
+        const isSession = sub.subscriptionType === 'sessions';
+        const hasSessionsLeft = isSession && sub.sessionsLimit > 0 && (sub.sessionsUsed || 0) < sub.sessionsLimit;
+        const isDateValid = sub.endDate && new Date(sub.endDate) >= now;
+
+        if (sub.status === 'frozen') {
+          membershipStatus = 'Frozen';
+        } else if (sub.status === 'active' && isDateValid && (!isSession || hasSessionsLeft)) {
+          membershipStatus = 'Active';
+        } else {
+          membershipStatus = 'Expired';
+        }
+
+        if (isSession) {
+          sessionInfo = {
+            sessionsUsed: sub.sessionsUsed || 0,
+            sessionsLimit: sub.sessionsLimit,
+            sessionsRemaining: Math.max(0, sub.sessionsLimit - (sub.sessionsUsed || 0)),
+          };
+        }
+      }
+
+      if (r.member) {
+        r.member.membershipStatus = membershipStatus;
+        if (sessionInfo) {
+          r.member.sessionInfo = sessionInfo;
+        }
+      }
+      return r;
+    });
+
+    res.json(recordsWithStatus);
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── Get member attendance history ───────────────────────────────────────────
+
+export const getMemberHistory = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const { memberId } = req.params;
+    const limit = Number(req.query.limit) || 30;
+
+    const records = await Attendance.find({ member: memberId })
+      .sort({ checkInTime: -1 })
+      .limit(limit);
+
+    res.json(records);
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── Get Today's Attendance ───────────────────────────────────────────────────
+export const getTodayAttendance = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const today = todayString();
+    const shiftFilter = getShiftFilter(cashier);
+    const records = await Attendance.find({ date: today, ...shiftFilter })
+      .populate('member', 'name phone qrToken')
+      .sort({ checkInTime: -1 });
+    res.status(200).json({ success: true, data: records });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── Get Attendance Statistics ────────────────────────────────────────────────
+export const getAttendanceStats = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const today = getBusinessDateString();
+    const shiftFilter = getShiftFilter(cashier);
+
+    const dayBounds = getBusinessDayBounds();
+    const monthBounds = getBusinessMonthBounds();
+
+    const cairoDate = getCairoNow();
+    const startOfWeekDate = new Date(cairoDate);
+    startOfWeekDate.setDate(cairoDate.getDate() - cairoDate.getDay());
+    const startOfWeekStr = getBusinessDateString(startOfWeekDate);
+
+    const todayCount = await Attendance.countDocuments({ date: today, ...shiftFilter });
+    const monthCount = await Attendance.countDocuments({ checkInTime: { $gte: monthBounds.startUtc, $lte: monthBounds.endUtc }, ...shiftFilter });
+    const weekCount  = await Attendance.countDocuments({ date: { $gte: startOfWeekStr }, ...shiftFilter });
+
+    const daysElapsed = cairoDate.getDate() || 1;
+    const averageDaily = Math.round(monthCount / daysElapsed);
+
+    res.status(200).json({
+      success: true,
+      stats: { today: todayCount, thisWeek: weekCount, thisMonth: monthCount, averageDaily }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const checkInByQR = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const qrCode = req.body.qrCode || req.body.qrToken || req.body.code;
+    if (!qrCode) {
+      return res.status(400).json({ success: false, message: 'رمز الـ QR مطلوب' });
+    }
+
+    const rawStr = String(qrCode).trim();
+    const token = cleanQrToken(rawStr);
+    const decodedAscii = decodeNumericAscii(rawStr);
+    const searchTokens = Array.from(new Set([token, decodedAscii, rawStr].filter(Boolean)));
+
+    let member = await Member.findOne({ qrToken: { $in: searchTokens } });
+    if (!member) {
+      const regexPattern = `^(${searchTokens.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`;
+      member = await Member.findOne({ qrToken: { $regex: new RegExp(regexPattern, 'i') } });
+    }
+    if (!member) {
+      for (const t of searchTokens) {
+        if (mongoose.Types.ObjectId.isValid(t)) {
+          member = await Member.findById(t);
+          if (member) break;
+        }
+      }
+    }
+
+    if (!member) {
+      return res.status(404).json({ success: false, message: 'العضو غير موجود' });
+    }
+    if (!member.active) {
+      return res.status(403).json({ success: false, message: 'حساب العضو غير نشط' });
+    }
+    if (member.isQrActive === false) {
+      return res.status(403).json({ success: false, message: 'كود الـ QR معطل لهذا العضو' });
+    }
+
+    // SHIFT CHECK
+    if (!canAccessShift(cashier, member.shiftType)) {
+      return res.status(403).json({ success: false, message: 'هذا العضو لا ينتمي لشفتك' });
+    }
+
+    const frozenSub = await Subscription.findOne({ member: member._id, status: 'frozen' });
+    if (frozenSub) {
+      return res.status(422).json({ success: false, message: 'الاشتراك مجمد حالياً.' });
+    }
+
+    const now = new Date();
+    const activeSub = await Subscription.findOne({
+      member: member._id,
+      status: 'active',
+      endDate: { $gte: now },
+    }).sort({ endDate: -1 });
+
+    if (!activeSub) {
+      await Subscription.updateMany(
+        { member: member._id, status: 'active', endDate: { $lt: now } },
+        { status: 'expired' }
+      );
+      member.isQrActive = false;
+      await member.save();
+      return res.status(422).json({ success: false, message: 'الاشتراك منتهي، يرجى تجديد الاشتراك أولاً.', requiresRenewal: true });
+    }
+
+    if (activeSub.subscriptionType === 'sessions' && activeSub.sessionsLimit > 0) {
+      if ((activeSub.sessionsUsed || 0) >= activeSub.sessionsLimit) {
+        activeSub.status = 'expired';
+        await activeSub.save();
+        member.isQrActive = false;
+        await member.save();
+        return res.status(422).json({
+          success: false,
+          message: `انتهت جميع الحصص (${activeSub.sessionsLimit}/${activeSub.sessionsLimit})، يرجى تجديد الاشتراك.`,
+          requiresRenewal: true
+        });
+      }
+    }
+
+    const cairoTime = getCairoNow();
+    const today = getBusinessDateString();
+
+    const existing = await Attendance.findOne({ member: member._id, date: today });
+
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: 'تم تسجيل حضور هذا العضو بالفعل اليوم',
+        member: member.name,
+        checkInTime: existing.checkInTime,
+      });
+    }
+
+    const record = await Attendance.create({
+      member:      member._id,
+      checkInTime: now,
+      date:        today,
+      qrToken:     token,
+      method:      'QR',
+      status:      'CHECKED_IN',
+      shiftType:   member.shiftType,
+    });
+
+    if (activeSub.subscriptionType === 'sessions' && activeSub.sessionsLimit > 0) {
+      activeSub.sessionsUsed = (activeSub.sessionsUsed || 0) + 1;
+      if (activeSub.sessionsUsed >= activeSub.sessionsLimit) {
+        activeSub.status = 'expired';
+        member.isQrActive = false;
+        await member.save();
+      }
+      await activeSub.save();
+    }
+
+    if (member.phone) {
+      const timeStr = cairoTime.toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit', hour12: true });
+      sendWhatsApp(member.phone, templates.checkInSuccess(member.name, timeStr)).catch(e => console.error('[WhatsApp] checkin notification error:', e));
+    }
+
+    return res.status(201).json({ success: true, message: 'تم تسجيل الحضور بنجاح', member: member.name, checkInTime: record.checkInTime });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── Delete Attendance Record ───────────────────────────────────────────────────
+export const deleteAttendance = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const { id } = req.params;
+
+    const record = await Attendance.findById(id).populate('member');
+    if (!record) {
+      return res.status(404).json({ success: false, message: 'سجل الحضور غير موجود' });
+    }
+
+    const member = record.member as any;
+    if (member && member.shiftType && !canAccessShift(cashier, member.shiftType)) {
+      return res.status(403).json({ success: false, message: 'هذا السجل لا ينتمي لشفتك' });
+    }
+
+    // If session-based subscription, restore 1 session
+    if (member) {
+      const sub = await Subscription.findOne({ member: member._id, subscriptionType: 'sessions' }).sort({ endDate: -1 });
+      if (sub && sub.sessionsUsed > 0) {
+        sub.sessionsUsed = Math.max(0, sub.sessionsUsed - 1);
+        if (sub.status === 'expired' && sub.sessionsUsed < sub.sessionsLimit) {
+          sub.status = 'active';
+        }
+        await sub.save();
+      }
+    }
+
+    await Attendance.findByIdAndDelete(id);
+
+    return res.status(200).json({ success: true, message: 'تم حذف سجل الحضور بنجاح' });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+

@@ -1,0 +1,302 @@
+'use client';
+import React, { useState } from 'react';
+import api from '../../lib/axios';
+import { useFastQuery } from '../../lib/swr';
+import ConfirmModal from '../../components/ConfirmModal';
+import { UserPlusIcon, KeyIcon, UserGroupIcon, ShieldCheckIcon, LockClosedIcon } from '@heroicons/react/24/outline';
+
+const CashierUsersPage = () => {
+  const { data: cashiersData, mutate: mutateCashiers } = useFastQuery('/auth/cashiers');
+  const cashiers: any[] = Array.isArray(cashiersData) ? cashiersData : [];
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+
+  // Form State
+  const [form, setForm] = useState({
+    name: '',
+    username: '',
+    password: '',
+    role: 'cashier',
+    shiftType: 'GIRLS',
+  });
+
+  // Modal State
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [selectedCashier, setSelectedCashier] = useState<any>(null);
+  const [actionType, setActionType] = useState<'create' | 'toggleActive' | 'resetPassword'>('create');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+
+  const loadCashiers = async () => {
+    mutateCashiers();
+  };
+
+  const handleCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name || !form.username || !form.password) {
+      setErrorMessage('جميع الحقول مطلوبة');
+      return;
+    }
+    setActionType('create');
+    setConfirmOpen(true);
+  };
+
+  const handleToggleActive = (cashier: any) => {
+    setSelectedCashier(cashier);
+    setActionType('toggleActive');
+    setConfirmOpen(true);
+  };
+
+  const handleOpenResetPassword = (cashier: any) => {
+    setSelectedCashier(cashier);
+    setNewPasswordInput('');
+    setActionType('resetPassword');
+    setConfirmOpen(true);
+  };
+
+  const executeConfirmedAction = async () => {
+    setErrorMessage('');
+    setSuccessMessage('');
+
+    if (actionType === 'resetPassword' && !newPasswordInput.trim()) {
+      setErrorMessage('يرجى كتابة كلمة المرور الجديدة');
+      return;
+    }
+
+    setConfirmOpen(false);
+
+    try {
+      if (actionType === 'create') {
+        await api.post('/auth/register', form);
+        setSuccessMessage(`✅ تم إنشاء حساب الكاشير (${form.name}) بنجاح!`);
+        setForm({ name: '', username: '', password: '', role: 'cashier', shiftType: 'GIRLS' });
+        await loadCashiers();
+      } else if (actionType === 'toggleActive' && selectedCashier) {
+        const nextActiveState = !selectedCashier.active;
+        await api.put(`/auth/cashiers/${selectedCashier._id}`, { active: nextActiveState });
+        setSuccessMessage(`✅ تم ${nextActiveState ? 'تفعيل' : 'تعطيل'} حساب (${selectedCashier.name}) بنجاح`);
+        await loadCashiers();
+      } else if (actionType === 'resetPassword' && selectedCashier) {
+        await api.put(`/auth/cashiers/${selectedCashier._id}`, { password: newPasswordInput });
+        setSuccessMessage(`✅ تم تغيير كلمة المرور للحساب (${selectedCashier.name}) بنجاح`);
+        setNewPasswordInput('');
+        await loadCashiers();
+      }
+    } catch (err: any) {
+      setErrorMessage(err.response?.data?.message || 'حدث خطأ أثناء تنفيذ العملية');
+    }
+  };
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <ShieldCheckIcon style={{ width: '28px', height: '28px', color: 'var(--primary)' }} />
+          <h1>إدارة حسابات الكاشير والموظفين</h1>
+        </div>
+      </div>
+
+      {successMessage && (
+        <div className="message" style={{ marginBottom: '20px' }}>
+          {successMessage}
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="error-msg" style={{ marginBottom: '20px' }}>
+          {errorMessage}
+        </div>
+      )}
+
+      {/* ── Form: Create Cashier ── */}
+      <form className="form-card" onSubmit={handleCreateSubmit} style={{ marginBottom: '24px' }}>
+        <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--primary)' }}>
+          <UserPlusIcon style={{ width: '20px' }} />
+          إنشاء حساب كاشير جديد
+        </h3>
+
+        <div className="form-row">
+          <div>
+            <label>اسم الموظف / الكاشير (ثلاثي)</label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={e => setForm({ ...form, name: e.target.value })}
+              placeholder="مثال: أحمد محمد علي"
+              required
+            />
+          </div>
+          <div>
+            <label>اسم المستخدم (اليوزرنيم)</label>
+            <input
+              type="text"
+              value={form.username}
+              onChange={e => setForm({ ...form, username: e.target.value })}
+              placeholder="مثال: ahmed12"
+              required
+            />
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div>
+            <label>كلمة المرور (الباسورد)</label>
+            <input
+              type="password"
+              value={form.password}
+              onChange={e => setForm({ ...form, password: e.target.value })}
+              placeholder="أدخل كلمة مرور قوية"
+              required
+            />
+          </div>
+          <div>
+            <label>الصلاحية</label>
+            <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
+              <option value="cashier">كاشير (صلاحيات شفت)</option>
+              <option value="admin">أدمن (صلاحيات كاملة لكل الشفتات)</option>
+            </select>
+          </div>
+          {form.role === 'cashier' && (
+            <div>
+              <label>الشفت المخصص (Shift)</label>
+              <select value={form.shiftType} onChange={e => setForm({ ...form, shiftType: e.target.value })}>
+                <option value="GIRLS">🌸 شفت البنات (GIRLS)</option>
+                <option value="BOYS">🏋️‍♂️ شفت الشباب (BOYS)</option>
+              </select>
+            </div>
+          )}
+        </div>
+
+        <button type="submit" style={{ marginTop: '8px' }}>
+          ＋ حفظ وإضافة الكاشير
+        </button>
+      </form>
+
+      {/* ── Table: Registered Cashiers ── */}
+      <div className="form-card">
+        <h3 style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <UserGroupIcon style={{ width: '20px' }} />
+          قائمة الكاشيرية المسجلين بالنظام ({cashiers.length})
+        </h3>
+
+        <div className="table-container">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>الاسم</th>
+                <th>اسم المستخدم</th>
+                <th>الصلاحية</th>
+                <th>الشفت</th>
+                <th>الحالة</th>
+                <th>تاريخ الإنشاء</th>
+                <th style={{ textAlign: 'center' }}>الإجراءات</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cashiers.map((c) => (
+                <tr key={c._id}>
+                  <td style={{ fontWeight: 'bold' }}>{c.name}</td>
+                  <td style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{c.username}</td>
+                  <td>
+                    <span className={`badge ${c.role === 'admin' ? 'badge-warning' : 'badge-secondary'}`}>
+                      {c.role === 'admin' ? '👑 أدمن' : '👤 كاشير'}
+                    </span>
+                  </td>
+                  <td>
+                    {c.role === 'admin' ? (
+                      <span className="badge badge-warning">🌐 كل الشفتات</span>
+                    ) : c.shiftType === 'GIRLS' ? (
+                      <span className="badge badge-secondary" style={{ color: '#ec4899', borderColor: '#fbcfe8', background: 'rgba(236,72,153,0.1)' }}>🌸 بنات</span>
+                    ) : c.shiftType === 'BOYS' ? (
+                      <span className="badge badge-secondary" style={{ color: '#3b82f6', borderColor: '#bfdbfe', background: 'rgba(59,130,246,0.1)' }}>🏋️‍♂️ شباب</span>
+                    ) : (
+                      <span className="badge badge-secondary">غير محدد</span>
+                    )}
+                  </td>
+                  <td>
+                    <span className={`badge ${c.active !== false ? 'badge-success' : 'badge-danger'}`}>
+                      {c.active !== false ? 'نشط' : 'معطل'}
+                    </span>
+                  </td>
+                  <td>{new Date(c.createdAt || Date.now()).toLocaleDateString('ar-EG')}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                      <button
+                        className="btn-small btn-secondary"
+                        onClick={() => handleOpenResetPassword(c)}
+                        title="تغيير الباسورد"
+                        style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        <KeyIcon style={{ width: '14px' }} />
+                        كلمة السر
+                      </button>
+                      <button
+                        className={`btn-small ${c.active !== false ? 'btn-danger' : 'btn-primary'}`}
+                        onClick={() => handleToggleActive(c)}
+                      >
+                        {c.active !== false ? 'تعطيل الحساب' : 'تفعيل الحساب'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {cashiers.length === 0 && (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+                    لا يوجد حسابات كاشير مسجلة
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Confirm Modal ── */}
+      <ConfirmModal
+        open={confirmOpen}
+        type={actionType === 'toggleActive' && selectedCashier?.active !== false ? 'danger' : 'info'}
+        title={
+          actionType === 'create'
+            ? 'تأكيد إضافة الكاشير'
+            : actionType === 'toggleActive'
+            ? `تأكيد ${selectedCashier?.active !== false ? 'تعطيل' : 'تفعيل'} الحساب`
+            : 'تغيير كلمة المرور'
+        }
+        message={
+          actionType === 'create' ? (
+            <span>
+              هل أنت متأكد من إنشاء حساب جديد لـ <strong className="confirm-highlight">{form.name}</strong> باسم مستخدم (<strong className="confirm-highlight">{form.username}</strong>)؟
+            </span>
+          ) : actionType === 'toggleActive' ? (
+            <span>
+              هل أنت متأكد من تغيير حالة حساب <strong className="confirm-highlight">{selectedCashier?.name}</strong> إلى (<strong className="confirm-highlight">{selectedCashier?.active !== false ? 'معطل' : 'نشط'}</strong>)؟
+            </span>
+          ) : (
+            <span>
+              أدخل كلمة المرور الجديدة للحساب <strong className="confirm-highlight">({selectedCashier?.name})</strong>:
+            </span>
+          )
+        }
+        confirmText="نعم، تأكيد"
+        cancelText="إلغاء"
+        onConfirm={executeConfirmedAction}
+        onCancel={() => setConfirmOpen(false)}
+      >
+        {actionType === 'resetPassword' && (
+          <div style={{ marginTop: '12px' }}>
+            <input
+              type="password"
+              placeholder="كلمة المرور الجديدة"
+              value={newPasswordInput}
+              onChange={(e) => setNewPasswordInput(e.target.value)}
+              style={{ width: '100%', padding: '12px', borderRadius: '8px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: '#fff' }}
+              autoFocus
+            />
+          </div>
+        )}
+      </ConfirmModal>
+    </div>
+  );
+};
+
+export default CashierUsersPage;

@@ -1,0 +1,499 @@
+import { Request, Response } from 'express';
+import mongoose from 'mongoose';
+import QRCode from 'qrcode';
+import crypto from 'crypto';
+import Member, { generateShortToken } from '../models/Member';
+import Subscription from '../models/Subscription';
+import Attendance from '../models/Attendance';
+import Payment from '../models/Payment';
+import WorkoutPlan from '../models/WorkoutPlan';
+import DietPlan from '../models/DietPlan';
+import { getShiftFilter, canAccessShift, AuthCashier } from '../middleware/auth';
+import { encryptPhone } from '../utils/crypto';
+import { sendMemberQrWhatsApp as sendQrViaWhatsApp } from '../services/notification.service';
+
+// ─── Helper: verify a member belongs to the cashier's shift ───────────────────
+const assertShiftAccess = async (cashier: AuthCashier, memberId: any, res: Response): Promise<any | null> => {
+  const member = await Member.findById(memberId);
+  if (!member) {
+    res.status(404).json({ message: 'العضو مش موجود' });
+    return null;
+  }
+  if (!canAccessShift(cashier, member.shiftType)) {
+    res.status(403).json({ message: 'ليس لديك صلاحية الوصول لبيانات هذا الشفت' });
+    return null;
+  }
+  return member;
+};
+
+// ─── GET /api/members ─────────────────────────────────────────────────────────
+export const getMembers = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const { search } = req.query;
+
+    // Shift filter — admin sees all, cashier sees their shift
+    const shiftFilter = getShiftFilter(cashier);
+    const baseQuery = { active: { $ne: false }, ...shiftFilter };
+
+    let query: any = baseQuery;
+    if (search && typeof search === 'string' && search.trim() !== '') {
+      const s = search.trim();
+      query = {
+        ...baseQuery,
+        $or: [
+          { name: new RegExp(s, 'i') },
+          { phone: encryptPhone(s) },
+          { phone: new RegExp(s, 'i') },
+        ],
+      };
+    }
+
+    const members = await Member.find(query).sort({ createdAt: -1 });
+    res.json(members);
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── GET /api/members/:id ─────────────────────────────────────────────────────
+export const getMemberById = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const member = await Member.findById(req.params.id);
+    if (!member) return res.status(404).json({ message: 'العضو مش موجود' });
+
+    // IDOR check
+    if (!canAccessShift(cashier, member.shiftType)) {
+      return res.status(403).json({ message: 'ليس لديك صلاحية الوصول لبيانات هذا الشفت' });
+    }
+
+    const subscriptions = await Subscription.find({ member: member._id })
+      .populate('plan', 'name durationInDays price')
+      .sort({ createdAt: -1 });
+
+    res.json({ member, subscriptions });
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── POST /api/members ────────────────────────────────────────────────────────
+export const createMember = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const { name, phone, email } = req.body;
+    if (!name || !phone) {
+      return res.status(400).json({ message: 'الاسم والتليفون مطلوبين' });
+    }
+
+    if (name.trim().length < 3) {
+      return res.status(400).json({ message: 'الاسم يجب أن يكون مكون من 3 حروف على الأقل' });
+    }
+
+    const phoneRegex = /^01[0125]\d{8}$/;
+    if (!phoneRegex.test(phone.trim())) {
+      return res.status(400).json({ message: 'رقم الموبايل غير صحيح. يجب أن يكون رقم مصري مكون من 11 رقم يبدأ بـ 01' });
+    }
+
+    const cleanPhone = phone.trim();
+    const encryptedPhone = encryptPhone(cleanPhone);
+    const existingPhone = await Member.findOne({
+      $or: [{ phone: encryptedPhone }, { phone: cleanPhone }],
+      active: true,
+    });
+    if (existingPhone) {
+      return res.status(400).json({ message: 'رقم الموبايل مسجل بالفعل لعضو آخر' });
+    }
+
+    if (email && email.trim() !== '') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        return res.status(400).json({ message: 'البريد الإلكتروني غير صحيح' });
+      }
+    }
+
+    // Security: backend always sets shiftType from JWT — NEVER from request body
+    const assignedShiftType = cashier.shiftType || 'unassigned';
+
+    // Strip shiftType from body (never trust client)
+    const { shiftType: _ignored, ...safeBody } = req.body;
+
+    const member = await Member.create({
+      ...safeBody,
+      name: name.trim(),
+      phone: cleanPhone,
+      email: email ? email.trim() : undefined,
+      shiftType: assignedShiftType,
+    });
+    res.status(201).json(member);
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── PUT /api/members/:id ─────────────────────────────────────────────────────
+export const updateMember = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const { name, phone, email } = req.body;
+
+    // IDOR check
+    const member = await assertShiftAccess(cashier, req.params.id, res);
+    if (!member) return;
+
+    if (name && name.trim().length < 3) {
+      return res.status(400).json({ message: 'الاسم يجب أن يكون مكون من 3 حروف على الأقل' });
+    }
+
+    if (phone) {
+      const phoneRegex = /^01[0125]\d{8}$/;
+      if (!phoneRegex.test(phone.trim())) {
+        return res.status(400).json({ message: 'رقم الموبايل غير صحيح. يجب أن يكون رقم مصري مكون من 11 رقم يبدأ بـ 01' });
+      }
+      const cleanPhone = phone.trim();
+      const encryptedPhone = encryptPhone(cleanPhone);
+      const existingPhone = await Member.findOne({
+        $or: [{ phone: encryptedPhone }, { phone: cleanPhone }],
+        active: true,
+        _id: { $ne: req.params.id },
+      });
+      if (existingPhone) {
+        return res.status(400).json({ message: 'رقم الموبايل مسجل بالفعل لعضو آخر' });
+      }
+    }
+
+    if (email && email.trim() !== '') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        return res.status(400).json({ message: 'البريد الإلكتروني غير صحيح' });
+      }
+    }
+
+    // Strip shiftType from body — cannot be changed by cashier
+    const { shiftType: _ignored, ...safeBody } = req.body;
+    // Admin can update shiftType explicitly via the safeBody only if admin
+    const updateData: any = {
+      ...safeBody,
+      name: name ? name.trim() : undefined,
+      phone: phone ? encryptPhone(phone.trim()) : undefined,
+      email: email ? email.trim() : undefined,
+    };
+    // Only admin can change shiftType
+    if (cashier.role === 'admin' && req.body.shiftType) {
+      updateData.shiftType = req.body.shiftType;
+    }
+
+    const updated = await Member.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+      runValidators: true,
+    });
+    if (!updated) return res.status(404).json({ message: 'العضو مش موجود' });
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── DELETE /api/members/:id ──────────────────────────────────────────────────
+export const deleteMember = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+
+    // IDOR check
+    const member = await assertShiftAccess(cashier, req.params.id, res);
+    if (!member) return;
+
+    // Check if member has active subscriptions before deactivating
+    const now = new Date();
+    const activeSub = await Subscription.findOne({ member: member._id, status: 'active', endDate: { $gte: now } });
+    if (activeSub) {
+      return res.status(400).json({ message: 'لا يمكن حذف عضو لديه اشتراك ساري ونشط. يرجى إلغاء أو إنهاء الاشتراك أولاً.' });
+    }
+
+    await Member.findByIdAndUpdate(req.params.id, { active: false }, { new: true });
+    res.json({ message: 'تم تعطيل العضو بنجاح' });
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── GET /api/members/public/qr/:token ─── PUBLIC (no auth) ──────────────────
+export const getPublicMemberByToken = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const { token } = req.params;
+    const tokenStr = String(token).trim();
+
+    let member: any = await Member.findOne({ qrToken: tokenStr });
+    if (!member && mongoose.Types.ObjectId.isValid(tokenStr)) {
+      member = await Member.findById(tokenStr);
+    }
+
+    if (!member) {
+      return res.status(404).json({ success: false, message: 'العضو غير موجود' });
+    }
+
+    if (!member.active) {
+      return res.status(403).json({ success: false, message: 'حساب العضو غير نشط' });
+    }
+
+    if (member.isQrActive === false) {
+      return res.status(403).json({ success: false, message: 'كود الـ QR مغلق لانتهاء الاشتراك - يرجى مراجعة إدارة الجيم لتجديد اشتراكك' });
+    }
+
+    // Auto-generate qrToken if missing (legacy members)
+    if (!member.qrToken) {
+      member.qrToken = generateShortToken(12);
+      await member.save();
+    }
+
+    const now = new Date();
+    // Check frozen first
+    const frozenSub = await Subscription.findOne({ member: member._id, status: 'frozen' });
+    // Check active (must have active status AND endDate >= now)
+    const activeSub = await Subscription.findOne({
+      member: member._id,
+      status: 'active',
+      endDate: { $gte: now },
+    }).sort({ endDate: -1 });
+
+    const lastSub = await Subscription.findOne({ member: member._id }).sort({ endDate: -1 });
+
+    let membershipStatus = 'Expired';
+    let endDate = null;
+    let sessionInfo = null;
+
+    if (frozenSub) {
+      membershipStatus = 'Frozen';
+      endDate = frozenSub.freezeEndDate || frozenSub.endDate;
+    } else if (activeSub) {
+      if (activeSub.subscriptionType === 'sessions' && activeSub.sessionsLimit > 0 && (activeSub.sessionsUsed || 0) >= activeSub.sessionsLimit) {
+        membershipStatus = 'Expired';
+        activeSub.status = 'expired';
+        await activeSub.save();
+        if (member.isQrActive !== false) {
+          member.isQrActive = false;
+          await member.save();
+        }
+      } else {
+        membershipStatus = 'Active';
+      }
+      endDate = activeSub.endDate;
+
+      if (activeSub.subscriptionType === 'sessions') {
+        sessionInfo = {
+          sessionsLimit: activeSub.sessionsLimit,
+          sessionsUsed: activeSub.sessionsUsed || 0,
+          sessionsRemaining: Math.max(0, activeSub.sessionsLimit - (activeSub.sessionsUsed || 0)),
+        };
+      }
+    } else {
+      membershipStatus = 'Expired';
+      if (lastSub) {
+        endDate = lastSub.endDate;
+        if (lastSub.status === 'active') {
+          lastSub.status = 'expired';
+          await lastSub.save();
+        }
+      }
+      if (member.isQrActive !== false) {
+        member.isQrActive = false;
+        await member.save();
+      }
+    }
+
+    res.json({
+      success: true,
+      name: member.name,
+      qrToken: member.qrToken,
+      membershipStatus,
+      endDate,
+      sessionInfo,
+      isQrActive: member.isQrActive !== false,
+      active: member.active,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── GET /api/members/:id/qr ──────────────────────────────────────────────────
+export const getMemberQrCode = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const member = await assertShiftAccess(cashier, req.params.id, res);
+    if (!member) return;
+
+    if (!member.isQrActive) {
+      return res.status(400).json({ message: 'الـ QR الخاص بهذا العضو معطل' });
+    }
+
+    // Auto-generate qrToken if missing (legacy members)
+    if (!member.qrToken) {
+      member.qrToken = generateShortToken(12);
+      await member.save();
+    }
+
+    const qrDataUrl = await QRCode.toDataURL(member.qrToken);
+    res.json({ success: true, qrCode: qrDataUrl });
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── POST /api/members/:id/qr/regenerate ─────────────────────────────────────
+export const regenerateMemberQr = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const member = await assertShiftAccess(cashier, req.params.id, res);
+    if (!member) return;
+
+    member.qrToken = generateShortToken(12);
+    await member.save();
+
+    const qrDataUrl = await QRCode.toDataURL(member.qrToken);
+    res.json({ success: true, message: 'تم إعادة إنشاء الـ QR بنجاح', qrCode: qrDataUrl });
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── PATCH /api/members/:id/qr ────────────────────────────────────────────────
+export const toggleMemberQr = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const { isQrActive } = req.body;
+    if (typeof isQrActive !== 'boolean') {
+      return res.status(400).json({ message: 'يجب تحديد حالة الـ QR (مفعل/معطل)' });
+    }
+
+    const member = await assertShiftAccess(cashier, req.params.id, res);
+    if (!member) return;
+
+    member.isQrActive = isQrActive;
+    await member.save();
+
+    res.json({ success: true, message: isQrActive ? 'تم تفعيل الـ QR' : 'تم تعطيل الـ QR' });
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── GET /api/members/:id/profile ────────────────────────────────────────────
+export const getMemberProfile = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const { id } = req.params;
+
+    const member = await Member.findById(id).select('-__v');
+    if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
+
+    // IDOR check
+    if (!canAccessShift(cashier, member.shiftType)) {
+      return res.status(403).json({ success: false, message: 'ليس لديك صلاحية الوصول لبيانات هذا الشفت' });
+    }
+
+    const now = new Date();
+
+    let subscription = await Subscription.findOne({ member: id })
+      .populate('plan', 'name price')
+      .sort({ endDate: -1 });
+
+    if (subscription) {
+      if (subscription.subscriptionType === 'sessions') {
+        // Sync sessionsUsed to actual Attendance documents count for current subscription
+        const actualVisitsCount = await Attendance.countDocuments({
+          member: id,
+          checkInTime: { $gte: subscription.startDate },
+        });
+
+        subscription.sessionsUsed = actualVisitsCount;
+
+        if (subscription.sessionsLimit > 0 && subscription.sessionsUsed >= subscription.sessionsLimit) {
+          subscription.status = 'expired';
+        } else if (subscription.status === 'expired' && (subscription.sessionsLimit === 0 || subscription.sessionsUsed < subscription.sessionsLimit)) {
+          if (!subscription.endDate || subscription.endDate >= now) {
+            subscription.status = 'active'; // Restore active status if sessions are remaining!
+          }
+        }
+        await subscription.save();
+      } else if (subscription.status === 'active') {
+        const isDateExpired = subscription.endDate < now;
+        if (isDateExpired) {
+          subscription.status = 'expired';
+          await subscription.save();
+        }
+      }
+
+      if (subscription.status === 'expired' && member.isQrActive !== false) {
+        member.isQrActive = false;
+        await member.save();
+      }
+    }
+
+    const subscriptionPayment = subscription ? await Payment.findOne({ subscription: subscription._id }) : null;
+
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const attendanceCount = await Attendance.countDocuments({ member: id, date: { $gte: startOfMonth } });
+
+    let currentSubscriptionAttendanceCount = 0;
+    if (subscription && subscription.startDate) {
+      currentSubscriptionAttendanceCount = await Attendance.countDocuments({
+        member: id,
+        checkInTime: { $gte: subscription.startDate },
+      });
+    }
+
+    const recentAttendance = await Attendance.find({ member: id }).sort({ checkInTime: -1 }).limit(50);
+
+    const payments = await Payment.find({ member: id }).sort({ paymentDate: -1 });
+    const totalPaid = payments.reduce((s, p) => s + p.paidAmount, 0);
+    const totalRemaining = payments.reduce((s, p) => s + p.remainingAmount, 0);
+
+    const workoutPlan = await WorkoutPlan.findOne({ member: id, status: 'ACTIVE' })
+      .populate('trainer', 'name')
+      .sort({ createdAt: -1 });
+
+    const dietPlan = await DietPlan.findOne({ member: id, status: 'ACTIVE' })
+      .populate('trainer', 'name')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      member,
+      subscription,
+      subscriptionPayment,
+      attendance: { thisMonth: attendanceCount, currentSubscription: currentSubscriptionAttendanceCount, recent: recentAttendance },
+      payments: { totalPaid, totalRemaining, history: payments },
+      workoutPlan,
+      dietPlan,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── POST /api/members/:id/send-qr-whatsapp ───────────────────────────────────
+export const sendMemberQrWhatsAppController = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const cashier: AuthCashier = (req as any).cashier;
+    const member = await assertShiftAccess(cashier, req.params.id, res);
+    if (!member) return;
+
+    // Ensure member has a valid qrToken
+    if (!member.qrToken) {
+      member.qrToken = generateShortToken(12);
+      await member.save();
+    }
+
+    const sent = await sendQrViaWhatsApp(member);
+    if (!sent) {
+      return res.status(400).json({ success: false, message: 'تعذر إرسال الرسالة، يرجى التأكد من اتصال الواتساب أو صحة الرقم' });
+    }
+
+    res.json({ success: true, message: 'تم إرسال رابط كود الـ QR عبر الواتساب بنجاح' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
